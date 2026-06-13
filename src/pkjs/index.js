@@ -425,6 +425,7 @@ function buildSystemPrompt() {
     'Timeline tool: if the user asks to add/schedule/remind/put something on the timeline, set timeline to {"title":"short title","time":"ISO-8601 UTC date-time","body":"details","durationMinutes":30,"reminderMinutes":10}. If time is ambiguous, ask a short clarifying question and keep timeline null.',
     'Notes tool: add notes only for durable user preferences/facts or explicit "remember" requests. Put short note strings in notes. Do not duplicate existing memory or store temporary facts. The notes is YOUR databaes, add things YOU think are important.'
   ].join(' ');
+  ].join(' ');
   var extra = getSetting('ExtraSystemPrompt', '');
   if (extra) {
     prompt += ' User extra instructions: \"' + extra + '\"';
