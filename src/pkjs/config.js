@@ -46,6 +46,15 @@ module.exports = [
         "attributes": {
           "placeholder": "Brave API key"
         }
+      },
+      {
+        "type": "input",
+        "messageKey": "ExtraSystemPrompt",
+        "label": "Extra System Prompt",
+        "description": "Optional extra instructions added after the built-in prompt.",
+        "attributes": {
+          "placeholder": "Example: Be terse and use Danish when I ask in Danish."
+        }
       }
     ]
   },

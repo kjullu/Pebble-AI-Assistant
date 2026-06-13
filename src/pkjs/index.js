@@ -143,6 +143,7 @@ function saveSettings(convertedSettings, rawSettings) {
   var enableLocation = settingValue(convertedSettings, rawSettings, 'EnableLocation', messageKeys.EnableLocation);
   var enableSearch = settingValue(convertedSettings, rawSettings, 'EnableSearch', messageKeys.EnableSearch);
   var braveApiKey = settingValue(convertedSettings, rawSettings, 'BraveSearchApiKey', messageKeys.BraveSearchApiKey);
+  var extraSystemPrompt = settingValue(convertedSettings, rawSettings, 'ExtraSystemPrompt', messageKeys.ExtraSystemPrompt);
 
   if (apiKey !== undefined) {
     localStorage.setItem('OpenRouterApiKey', String(apiKey).trim());
@@ -159,23 +160,25 @@ function saveSettings(convertedSettings, rawSettings) {
   if (braveApiKey !== undefined) {
     localStorage.setItem('BraveSearchApiKey', String(braveApiKey).trim());
   }
+  if (extraSystemPrompt !== undefined) {
+    localStorage.setItem('ExtraSystemPrompt', String(extraSystemPrompt).trim());
+  }
 }
 
 function buildSystemPrompt() {
-  return [
-    'You are a concise assistant running on a Pebble watch.',
-    'Always return only valid JSON with this shape:',
-    '{"reply":"short user-visible answer","timeline":null,"search":null,"notes":null}',
-    'You have a notes/memory tool. When the user asks you to remember something, or tells you a durable preference/fact worth remembering, put one or more short note strings in notes.',
-    'Only add useful long-term notes. Do not add notes for temporary facts, ordinary questions, or things already present in memory.',
-    'If you need current web information and search is available, return {"reply":"Searching...","timeline":null,"search":"short search query"}.',
-    'Only request search once per user question. After search results are provided, answer from those results and set search to null.',
-    'If the user asks you to add, schedule, remind, or put something on the timeline, set timeline to:',
-    '{"title":"short title","time":"ISO-8601 UTC date-time","body":"details","durationMinutes":30,"reminderMinutes":10}',
-    'Use the current time for relative dates. If a time is ambiguous, ask a short clarifying question and set timeline to null.',
-    'Keep replies practical for a watch display unless the user asks for detail.',
-    'You should generally use 24h time when talking to the user.'
+  var prompt = [
+    'You are a practical assistant for a Pebble watch. Replies must be useful, compact, and readable on a tiny screen.',
+    'Return only valid JSON: {"reply":"answer for the watch","timeline":null,"search":null,"notes":null}.',
+    'Use 24-hour time. Use the provided current time, location context, search results, and notes/memory when relevant.',
+    'Search tool: if current web info is needed and search is available, return {"reply":"Searching...","timeline":null,"search":"short query","notes":null}. Request search at most once; after results are provided, answer and set search null.',
+    'Timeline tool: if the user asks to add/schedule/remind/put something on the timeline, set timeline to {"title":"short title","time":"ISO-8601 UTC date-time","body":"details","durationMinutes":30,"reminderMinutes":10}. If time is ambiguous, ask a short clarifying question and keep timeline null.',
+    'Notes tool: add notes only for durable user preferences/facts or explicit "remember" requests. Put short note strings in notes. Do not duplicate existing memory or store temporary facts.'
   ].join(' ');
+  var extra = getSetting('ExtraSystemPrompt', '');
+  if (extra) {
+    prompt += ' User extra instructions: ' + extra;
+  }
+  return prompt;
 }
 
 function buildMessages(prompt, contextText, searchResultsText) {

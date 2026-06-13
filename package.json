@@ -38,7 +38,8 @@
       "OpenRouterModel",
       "EnableLocation",
       "EnableSearch",
-      "BraveSearchApiKey"
+      "BraveSearchApiKey",
+      "ExtraSystemPrompt"
     ],
     "resources": {
       "media": []
