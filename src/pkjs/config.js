@@ -70,6 +70,15 @@ module.exports = [
         "attributes": {
           "placeholder": "User prefers 24-hour time."
         }
+      },
+      {
+        "type": "input",
+        "messageKey": "DebugLog",
+        "label": "Debug Log",
+        "description": "Copy this when reporting bugs. It is read-only-ish; saving may overwrite it until the next log line.",
+        "attributes": {
+          "placeholder": "No logs yet."
+        }
       }
     ]
   },

@@ -48,22 +48,6 @@ static void update_display(const char *status);
 static void clear_watch_session(void);
 static void send_simple_command(uint32_t key, const char *failure_status);
 
-static void request_stats_refresh(void) {
-  send_simple_command(MESSAGE_KEY_RefreshStats, "Stats unavailable");
-}
-
-static void request_stats_refresh_timer(void *context) {
-  request_stats_refresh();
-}
-
-static void request_stats_refresh_soon(void) {
-  s_stats_text[0] = '\0';
-  layer_mark_dirty(s_home_layer);
-  request_stats_refresh();
-  app_timer_register(1000, request_stats_refresh_timer, NULL);
-  app_timer_register(3000, request_stats_refresh_timer, NULL);
-}
-
 static void send_simple_command(uint32_t key, const char *failure_status) {
   DictionaryIterator *iter;
   AppMessageResult result = app_message_outbox_begin(&iter);
@@ -392,7 +376,6 @@ static void dictation_callback(DictationSession *session, DictationSessionStatus
     send_prompt(transcription);
   } else {
     s_show_home = true;
-    request_stats_refresh_soon();
     update_display("Ready");
   }
 }
@@ -419,7 +402,6 @@ static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
 
   if (!s_show_home) {
     s_show_home = true;
-    request_stats_refresh_soon();
     update_display("Ready");
     return;
   }
@@ -603,8 +585,6 @@ static void window_appear(Window *window) {
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
   touch_service_subscribe(touch_handler, NULL);
 #endif
-
-  request_stats_refresh_soon();
 
   if (s_start_dictation_on_appear) {
     s_start_dictation_on_appear = false;

@@ -46,7 +46,8 @@
       "EnableSearch",
       "BraveSearchApiKey",
       "ExtraSystemPrompt",
-      "NotesMemoryText"
+      "NotesMemoryText",
+      "DebugLog"
     ],
     "resources": {
       "media": []

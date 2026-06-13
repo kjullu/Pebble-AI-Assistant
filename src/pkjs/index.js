@@ -19,6 +19,22 @@ var sending = false;
 var activeRequests = [];
 var requestGeneration = 0;
 
+function debugLog(message) {
+  var line = new Date().toISOString() + ' ' + message;
+  console.log(line);
+  var existing = localStorage.getItem('DebugLog') || '';
+  var combined = existing ? existing + ' | ' + line : line;
+  var maxLength = 3500;
+  if (combined.length > maxLength) {
+    combined = combined.substring(combined.length - maxLength);
+    var firstSeparator = combined.indexOf(' | ');
+    if (firstSeparator !== -1) {
+      combined = combined.substring(firstSeparator + 3);
+    }
+  }
+  localStorage.setItem('DebugLog', combined);
+}
+
 function trackRequest(request, generation) {
   request._generation = generation;
   request._cancelled = false;
@@ -38,6 +54,7 @@ function requestIsCurrent(request) {
 }
 
 function cancelActiveRequests() {
+  debugLog('cancelActiveRequests active=' + activeRequests.length + ' generation=' + requestGeneration);
   requestGeneration++;
   for (var i = 0; i < activeRequests.length; i++) {
     activeRequests[i]._cancelled = true;
@@ -58,7 +75,9 @@ function sendToWatch(dict) {
 
 function showError(userMessage, detail) {
   if (detail) {
-    console.log(userMessage + ': ' + detail);
+    debugLog('ERROR ' + userMessage + ': ' + detail);
+  } else {
+    debugLog('ERROR ' + userMessage);
   }
   sendToWatch({ Error: userMessage });
 }
@@ -238,12 +257,12 @@ function refreshRemainingCredits() {
   };
 
   request.onerror = function() {
-    console.log('Credits network error');
+    debugLog('Credits network error');
     sendStatsToWatch();
   };
 
   request.ontimeout = function() {
-    console.log('Credits request timed out');
+    debugLog('Credits request timed out');
     sendStatsToWatch();
   };
 
@@ -541,6 +560,8 @@ function callModel(messages, generation, callback) {
   var apiKey = getSetting('OpenRouterApiKey', '');
   var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
 
+  debugLog('callModel start model=' + model + ' generation=' + generation + ' messages=' + messages.length);
+
   if (!apiKey) {
     showError('Open settings and add OpenRouter key.', 'Missing OpenRouter API key');
     return;
@@ -550,8 +571,6 @@ function callModel(messages, generation, callback) {
   trackRequest(request, generation);
   request.open('POST', OPENROUTER_URL, true);
   request.setRequestHeader('Content-Type', 'application/json');
-  request.setRequestHeader('Accept', 'text/event-stream');
-  request.setRequestHeader('Cache-Control', 'no-cache');
   request.setRequestHeader('Authorization', 'Bearer ' + apiKey);
   request.setRequestHeader('HTTP-Referer', 'https://repebble.com/');
   request.setRequestHeader('X-Title', 'Pebble AI Chat');
@@ -559,6 +578,7 @@ function callModel(messages, generation, callback) {
 
   request.onload = function() {
     untrackRequest(request);
+    debugLog('callModel onload status=' + request.status + ' current=' + requestIsCurrent(request) + ' len=' + (request.responseText || '').length);
     if (!requestIsCurrent(request)) {
       return;
     }
@@ -571,6 +591,7 @@ function callModel(messages, generation, callback) {
       var json = JSON.parse(request.responseText);
       addUsageStats(json.usage);
       var content = json.choices[0].message.content;
+      debugLog('callModel content len=' + String(content || '').length + ' prefix=' + clip(content, 180));
       callback(parseAssistantContent(content));
     } catch (err) {
       showError('Bad AI response.', err.message);
@@ -604,6 +625,8 @@ function callModelStream(messages, generation, callback) {
   var apiKey = getSetting('OpenRouterApiKey', '');
   var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
 
+  debugLog('callModelStream start model=' + model + ' generation=' + generation + ' messages=' + messages.length);
+
   if (!apiKey) {
     showError('Open settings and add OpenRouter key.', 'Missing OpenRouter API key');
     return;
@@ -617,6 +640,27 @@ function callModelStream(messages, generation, callback) {
   var sentReplyLength = 0;
   var chunkIndex = 0;
   var sentAnyChunk = false;
+  var fallbackStarted = false;
+  var streamWatchdog = null;
+
+  function startNonStreamingFallback(reason) {
+    if (fallbackStarted || !requestIsCurrent(request)) {
+      return;
+    }
+
+    fallbackStarted = true;
+    debugLog('stream fallback to non-stream reason=' + reason + ' responseLen=' + (request.responseText || '').length + ' fullContentLen=' + fullContent.length);
+    untrackRequest(request);
+    request._cancelled = true;
+    try {
+      request.abort();
+    } catch (err) {
+      debugLog('stream abort before fallback failed: ' + err.message);
+    }
+    callModel(messages, generation, function(retryParsed) {
+      callback(retryParsed, false);
+    });
+  }
 
   function processSseLine(line) {
     line = line.replace(/^\s+|\s+$/g, '');
@@ -633,6 +677,7 @@ function callModelStream(messages, generation, callback) {
       var json = JSON.parse(data);
       if (json.usage) {
         addUsageStats(json.usage);
+        debugLog('stream usage total=' + json.usage.total_tokens + ' cost=' + json.usage.cost);
       }
       var delta = json.choices && json.choices[0] && json.choices[0].delta;
       var contentDelta = delta && delta.content ? delta.content : '';
@@ -641,6 +686,11 @@ function callModelStream(messages, generation, callback) {
       }
 
       fullContent += contentDelta;
+      debugLog('stream delta len=' + contentDelta.length + ' full=' + fullContent.length);
+      if (streamWatchdog) {
+        clearTimeout(streamWatchdog);
+        streamWatchdog = null;
+      }
       var replySoFar = extractReplyFromPartialJson(fullContent);
       if (replySoFar.length > sentReplyLength) {
         var newText = replySoFar.substring(sentReplyLength);
@@ -667,6 +717,8 @@ function callModelStream(messages, generation, callback) {
 
   request.open('POST', OPENROUTER_URL, true);
   request.setRequestHeader('Content-Type', 'application/json');
+  request.setRequestHeader('Accept', 'text/event-stream');
+  request.setRequestHeader('Cache-Control', 'no-cache');
   request.setRequestHeader('Authorization', 'Bearer ' + apiKey);
   request.setRequestHeader('HTTP-Referer', 'https://repebble.com/');
   request.setRequestHeader('X-Title', 'Pebble AI Chat');
@@ -686,7 +738,15 @@ function callModelStream(messages, generation, callback) {
   };
 
   request.onload = function() {
+    if (streamWatchdog) {
+      clearTimeout(streamWatchdog);
+      streamWatchdog = null;
+    }
     untrackRequest(request);
+    if (fallbackStarted) {
+      return;
+    }
+    debugLog('callModelStream onload status=' + request.status + ' current=' + requestIsCurrent(request) + ' responseLen=' + (request.responseText || '').length + ' fullContentLen=' + fullContent.length);
     if (!requestIsCurrent(request)) {
       return;
     }
@@ -703,11 +763,9 @@ function callModelStream(messages, generation, callback) {
 
     var parsed = parseAssistantContent(fullContent);
     var finalReply = parsed.reply || extractReplyFromPartialJson(fullContent) || 'No response.';
+    debugLog('stream final replyLen=' + finalReply.length + ' search=' + !!parsed.search + ' notes=' + !!parsed.notes + ' prefix=' + clip(finalReply, 180));
     if (!fullContent || finalReply === 'No response.') {
-      console.log('Streaming returned no usable content; retrying without stream.');
-      callModel(messages, generation, function(retryParsed) {
-        callback(retryParsed, false);
-      });
+      startNonStreamingFallback('empty-final');
       return;
     }
 
@@ -727,20 +785,34 @@ function callModelStream(messages, generation, callback) {
   };
 
   request.onerror = function() {
+    if (streamWatchdog) {
+      clearTimeout(streamWatchdog);
+      streamWatchdog = null;
+    }
     untrackRequest(request);
-    if (!requestIsCurrent(request)) {
+    if (!requestIsCurrent(request) || fallbackStarted) {
       return;
     }
     showError('Check internet connection.', 'Network error contacting OpenRouter');
   };
 
   request.ontimeout = function() {
+    if (streamWatchdog) {
+      clearTimeout(streamWatchdog);
+      streamWatchdog = null;
+    }
     untrackRequest(request);
-    if (!requestIsCurrent(request)) {
+    if (!requestIsCurrent(request) || fallbackStarted) {
       return;
     }
-    showError('OpenRouter timed out.', 'OpenRouter request timed out');
+    startNonStreamingFallback('stream-timeout');
   };
+
+  streamWatchdog = setTimeout(function() {
+    if (!sentAnyChunk && !fullContent) {
+      startNonStreamingFallback('no-stream-after-8s');
+    }
+  }, 8000);
 
   request.send(JSON.stringify({
     model: model,
@@ -752,6 +824,7 @@ function callModelStream(messages, generation, callback) {
 
 function braveSearch(query, generation, callback) {
   var apiKey = getSetting('BraveSearchApiKey', '');
+  debugLog('braveSearch start query=' + query + ' generation=' + generation);
   if (!getBoolSetting('EnableSearch', false) || !apiKey) {
     callback(null, 'Search unavailable. Add Brave key in settings.');
     return;
@@ -769,6 +842,7 @@ function braveSearch(query, generation, callback) {
 
   request.onload = function() {
     untrackRequest(request);
+    debugLog('braveSearch onload status=' + request.status + ' current=' + requestIsCurrent(request));
     if (!requestIsCurrent(request)) {
       return;
     }
@@ -816,6 +890,7 @@ function braveSearch(query, generation, callback) {
 
 function finishAssistantTurn(prompt, parsed, alreadySent) {
   var reply = parsed.reply || 'No response.';
+  debugLog('finishAssistantTurn alreadySent=' + alreadySent + ' replyLen=' + reply.length + ' prefix=' + clip(reply, 180));
   history.push({ role: 'user', content: prompt });
   history.push({ role: 'assistant', content: reply });
   if (history.length > 12) {
@@ -842,11 +917,13 @@ function finishAssistantTurn(prompt, parsed, alreadySent) {
 function callOpenRouter(prompt) {
   requestGeneration++;
   var generation = requestGeneration;
+  debugLog('callOpenRouter promptLen=' + String(prompt || '').length + ' generation=' + generation + ' searchLooks=' + promptLooksLikeSearch(prompt));
   incrementStat('messages');
   sendStatsToWatch();
   sendToWatch({ Status: 'Thinking...' });
   getLocationContext(generation, function(locationContext) {
     var searchAvailable = getBoolSetting('EnableSearch', false) && !!getSetting('BraveSearchApiKey', '');
+    debugLog('context ready searchAvailable=' + searchAvailable + ' locationContext=' + clip(locationContext, 120));
     var contextText = locationContext + '\nSearch available: ' + (searchAvailable ? 'yes, request search with the search field when needed.' : 'no.') ;
     var firstMessages = buildMessages(prompt, contextText, null);
 
@@ -1025,7 +1102,8 @@ Pebble.addEventListener('showConfiguration', function() {
     EnableLocation: getBoolSetting('EnableLocation', false),
     EnableMemory: getBoolSetting('EnableMemory', true),
     EnableSearch: getBoolSetting('EnableSearch', false),
-    BraveSearchApiKey: getSetting('BraveSearchApiKey', '')
+    BraveSearchApiKey: getSetting('BraveSearchApiKey', ''),
+    DebugLog: localStorage.getItem('DebugLog') || ''
   });
   Pebble.openURL(clay.generateUrl());
 });
