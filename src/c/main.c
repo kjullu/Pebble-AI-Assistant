@@ -2,7 +2,8 @@
 
 //AI: Small spacing values used to lay out the Bobby-like stacked chat view.
 #define PADDING 5
-#define LABEL_HEIGHT 18
+#define LABEL_HEIGHT 24
+#define TEXT_MEASURE_HEIGHT 12000
 
 // Max characters Pebble dictation should store for one spoken prompt.
 #define DICTATION_BUFFER_SIZE 512
@@ -30,14 +31,14 @@ static char s_status_text[64];
 //AI: Configure a small label layer like Bobby's speaker labels.
 static void configure_label_layer(TextLayer *layer, const char *text) {
   text_layer_set_text(layer, text);
-  text_layer_set_font(layer, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD));
+  text_layer_set_font(layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_color(layer, GColorBlack);
   text_layer_set_background_color(layer, GColorClear);
 }
 
 //AI: Configure a larger message body layer.
 static void configure_message_layer(TextLayer *layer) {
-  text_layer_set_font(layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_font(layer, fonts_get_system_font(FONT_KEY_GOTHIC_24));
   text_layer_set_text_color(layer, GColorBlack);
   text_layer_set_background_color(layer, GColorClear);
   text_layer_set_overflow_mode(layer, GTextOverflowModeWordWrap);
@@ -45,10 +46,15 @@ static void configure_message_layer(TextLayer *layer) {
 
 //AI: Resize one message TextLayer to fit its current text and return its height.
 static int16_t resize_text_layer(TextLayer *layer, int16_t y, int16_t width) {
-  layer_set_frame(text_layer_get_layer(layer), GRect(PADDING, y, width - (PADDING * 2), 2000));
-  GSize size = text_layer_get_content_size(layer);
+  int16_t text_width = width - (PADDING * 2);
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+  const char *text = text_layer_get_text(layer);
+  GRect measure_rect = GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT);
+  GSize size = graphics_text_layout_get_content_size(text ? text : "", font, measure_rect,
+                                                     GTextOverflowModeWordWrap, GTextAlignmentLeft);
   int16_t height = size.h + PADDING;
-  text_layer_set_size(layer, GSize(width - (PADDING * 2), height));
+  layer_set_frame(text_layer_get_layer(layer), GRect(PADDING, y, text_width, height));
+  text_layer_set_size(layer, GSize(text_width, height));
   return height;
 }
 
@@ -91,7 +97,7 @@ static void layout_chat(bool scroll_to_bottom) {
     y += resize_text_layer(s_status_message_layer, y, width);
   }
 
-  int16_t content_height = has_prompt || has_response ? y + PADDING : bounds.size.h;
+  int16_t content_height = has_prompt || has_response || show_status_message ? y + PADDING : bounds.size.h;
   scroll_layer_set_content_size(s_scroll_layer, GSize(width, content_height));
 
   if (scroll_to_bottom && content_height > bounds.size.h) {
