@@ -1,9 +1,9 @@
 {
-  "name": "pebble-openrouter-assistant",
-  "author": "OpenCode",
+  "name": "pebble-assistant",
+  "author": "Mikkel, OpenCode",
   "version": "0.1.0",
   "keywords": [
-    "pebble-app"
+    "Ai-chat-app"
   ],
   "private": true,
   "dependencies": {
