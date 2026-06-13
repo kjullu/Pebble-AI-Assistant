@@ -34,6 +34,8 @@ static char s_chat_history[CHAT_HISTORY_BUFFER_SIZE];
 static char s_status_text[64];
 static char s_stats_text[STATS_BUFFER_SIZE];
 static bool s_start_dictation_on_appear;
+static bool s_show_home = true;
+static bool s_request_active;
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
 static AppTimer *s_touch_long_timer;
 static bool s_touch_long_fired;
@@ -67,6 +69,8 @@ static void clear_watch_session(void) {
   s_last_prompt[0] = '\0';
   s_assistant_response[0] = '\0';
   s_chat_history[0] = '\0';
+  s_show_home = true;
+  s_request_active = false;
   vibes_short_pulse();
   update_display("New session");
 }
@@ -186,16 +190,16 @@ static void layout_chat(bool scroll_to_bottom) {
   bool has_history = s_chat_history[0] != '\0';
   bool show_status_message = strcmp(s_status_text, "Ready") != 0 && strcmp(s_status_text, "Done") != 0 && !has_response;
 
-  layer_set_hidden(s_home_layer, has_history || show_status_message);
+  layer_set_hidden(s_home_layer, !s_show_home || show_status_message);
   layer_set_hidden(text_layer_get_layer(s_empty_layer), true);
-  layer_set_hidden(s_history_layer, !has_history);
+  layer_set_hidden(s_history_layer, s_show_home || !has_history);
   layer_set_hidden(text_layer_get_layer(s_prompt_label_layer), true);
   layer_set_hidden(text_layer_get_layer(s_prompt_layer), true);
   layer_set_hidden(text_layer_get_layer(s_assistant_label_layer), true);
   layer_set_hidden(text_layer_get_layer(s_assistant_layer), true);
   layer_set_hidden(text_layer_get_layer(s_status_message_layer), !show_status_message);
 
-  if (has_history) {
+  if (!s_show_home && has_history) {
     int16_t text_width = width - (PADDING * 2);
     int16_t history_height = layout_history_text(NULL, GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT), false);
     layer_set_frame(s_history_layer, GRect(PADDING, y, text_width, history_height));
@@ -210,7 +214,7 @@ static void layout_chat(bool scroll_to_bottom) {
   }
 
   int16_t content_height;
-  if (has_history || show_status_message) {
+  if ((!s_show_home && has_history) || show_status_message) {
     content_height = y + PADDING;
   } else {
     int16_t text_width = width - (PADDING * 2);
@@ -262,6 +266,8 @@ static void send_prompt(const char *prompt) {
   // Store the latest prompt locally and clear the previous assistant reply.
   snprintf(s_last_prompt, sizeof(s_last_prompt), "%s", prompt);
   s_assistant_response[0] = '\0';
+  s_show_home = false;
+  s_request_active = true;
   if (s_chat_history[0] != '\0') {
     append_chat_history("\n\n");
   }
@@ -338,9 +344,15 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
     append_chat_history("\nError\n");
     append_chat_history(error_tuple->value->cstring);
     status = "Error";
+    s_request_active = false;
     vibes_double_pulse();
   } else if (chunk_done_tuple && chunk_done_tuple->value->int32 == 1) {
+    s_request_active = false;
     vibes_double_pulse();
+  }
+
+  if (status_tuple && strcmp(status, "Cancelled") == 0) {
+    s_request_active = false;
   }
 
   if (stats_tuple) {
@@ -362,8 +374,8 @@ static void dictation_callback(DictationSession *session, DictationSessionStatus
     // Forward the recognized speech to the phone-side JS for AI processing.
     send_prompt(transcription);
   } else {
-    // Any non-success status is treated as a cancelled/failed dictation attempt.
-    update_display("Dictation cancelled");
+    s_show_home = true;
+    update_display("Ready");
   }
 }
 
@@ -380,8 +392,20 @@ static void select_long_click_handler(ClickRecognizerRef recognizer, void *conte
 }
 
 static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
-  update_display("Cancelling...");
-  send_simple_command(MESSAGE_KEY_CancelRequest, "Cancel failed");
+  if (s_request_active) {
+    s_request_active = false;
+    update_display("Cancelling...");
+    send_simple_command(MESSAGE_KEY_CancelRequest, "Cancel failed");
+    return;
+  }
+
+  if (!s_show_home) {
+    s_show_home = true;
+    update_display("Ready");
+    return;
+  }
+
+  window_stack_pop(true);
 }
 
 static void up_long_click_handler(ClickRecognizerRef recognizer, void *context) {
