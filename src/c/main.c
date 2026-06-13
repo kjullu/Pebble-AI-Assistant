@@ -481,9 +481,6 @@ static void touch_handler(const TouchEvent *event, void *context) {
         app_timer_cancel(s_touch_long_timer);
         s_touch_long_timer = NULL;
       }
-      if (!s_touch_moved && !s_touch_long_fired) {
-        dictation_session_start(s_dictation_session);
-      }
       break;
   }
 }

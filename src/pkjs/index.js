@@ -4,6 +4,7 @@ var clayConfig = require('./config');
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
 var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+var OPENROUTER_CREDITS_URL = 'https://openrouter.ai/api/v1/credits';
 var BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 var TIMELINE_URL = 'https://timeline-api.getpebble.com/v1/user/pins/';
 var DEFAULT_MODEL = 'moonshotai/kimi-k2.5';
@@ -131,6 +132,7 @@ function defaultMonthlyStats() {
     messages: 0,
     searches: 0,
     usageCredits: 0,
+    remainingCredits: null,
     promptTokens: 0,
     completionTokens: 0,
     totalTokens: 0
@@ -164,6 +166,7 @@ function addUsageStats(usage) {
   stats.completionTokens += Number(usage.completion_tokens || 0);
   stats.totalTokens += Number(usage.total_tokens || 0);
   saveMonthlyStats(stats);
+  refreshRemainingCredits();
 }
 
 function incrementStat(key) {
@@ -183,8 +186,10 @@ function formatCredits(value) {
 function buildStatsText() {
   var stats = getMonthlyStats();
   var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
+  var remaining = stats.remainingCredits === null || stats.remainingCredits === undefined ? 'unavailable' : formatCredits(stats.remainingCredits);
   return [
-    'Credits: ' + formatCredits(stats.usageCredits),
+    'Used: ' + formatCredits(stats.usageCredits),
+    'Remaining: ' + remaining,
     'Messages: ' + Number(stats.messages || 0),
     'Searches: ' + Number(stats.searches || 0),
     'Location: ' + (getBoolSetting('EnableLocation', false) ? 'on' : 'off'),
@@ -196,6 +201,49 @@ function buildStatsText() {
 
 function sendStatsToWatch() {
   sendToWatch({ StatsText: buildStatsText() });
+}
+
+function refreshRemainingCredits() {
+  var apiKey = getSetting('OpenRouterApiKey', '');
+  if (!apiKey) {
+    return;
+  }
+
+  var request = new XMLHttpRequest();
+  request.open('GET', OPENROUTER_CREDITS_URL, true);
+  request.setRequestHeader('Authorization', 'Bearer ' + apiKey);
+  request.timeout = 15000;
+
+  request.onload = function() {
+    if (request.status < 200 || request.status >= 300) {
+      console.log('Credits unavailable: HTTP ' + request.status + ' ' + request.responseText);
+      return;
+    }
+
+    try {
+      var json = JSON.parse(request.responseText);
+      if (json.data) {
+        var totalCredits = Number(json.data.total_credits || 0);
+        var totalUsage = Number(json.data.total_usage || 0);
+        var stats = getMonthlyStats();
+        stats.remainingCredits = totalCredits - totalUsage;
+        saveMonthlyStats(stats);
+        sendStatsToWatch();
+      }
+    } catch (err) {
+      console.log('Credits parse failed: ' + err.message);
+    }
+  };
+
+  request.onerror = function() {
+    console.log('Credits network error');
+  };
+
+  request.ontimeout = function() {
+    console.log('Credits request timed out');
+  };
+
+  request.send();
 }
 
 function setBoolSetting(key, value) {
@@ -914,6 +962,7 @@ function addTimelinePin(timeline) {
 Pebble.addEventListener('ready', function() {
   console.log('PebbleKit JS ready');
   sendStatsToWatch();
+  refreshRemainingCredits();
 });
 
 Pebble.addEventListener('appmessage', function(e) {
@@ -973,4 +1022,5 @@ Pebble.addEventListener('webviewclosed', function(e) {
   saveSettings(convertedSettings, rawSettings);
   sendToWatch({ Status: 'Settings saved' });
   sendStatsToWatch();
+  refreshRemainingCredits();
 });
