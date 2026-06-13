@@ -6,7 +6,7 @@ var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 var BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 var TIMELINE_URL = 'https://timeline-api.getpebble.com/v1/user/pins/';
-var DEFAULT_MODEL = 'openai/gpt-4o-mini';
+var DEFAULT_MODEL = 'moonshotai/kimi-k2.5';
 var RESPONSE_CHUNK_CHARS = 700;
 var MAX_SEARCH_RESULTS = 3;
 var MAX_NOTES = 30;
@@ -15,10 +15,51 @@ var MAX_NOTE_CHARS = 240;
 var history = [];
 var sendQueue = [];
 var sending = false;
+var activeRequests = [];
+var requestGeneration = 0;
+
+function trackRequest(request, generation) {
+  request._generation = generation;
+  request._cancelled = false;
+  activeRequests.push(request);
+}
+
+function untrackRequest(request) {
+  for (var i = activeRequests.length - 1; i >= 0; i--) {
+    if (activeRequests[i] === request) {
+      activeRequests.splice(i, 1);
+    }
+  }
+}
+
+function requestIsCurrent(request) {
+  return !request._cancelled && request._generation === requestGeneration;
+}
+
+function cancelActiveRequests() {
+  requestGeneration++;
+  for (var i = 0; i < activeRequests.length; i++) {
+    activeRequests[i]._cancelled = true;
+    try {
+      activeRequests[i].abort();
+    } catch (err) {
+      console.log('Abort failed: ' + err.message);
+    }
+  }
+  activeRequests = [];
+  sendToWatch({ Status: 'Cancelled' });
+}
 
 function sendToWatch(dict) {
   sendQueue.push(dict);
   pumpSendQueue();
+}
+
+function showError(userMessage, detail) {
+  if (detail) {
+    console.log(userMessage + ': ' + detail);
+  }
+  sendToWatch({ Error: userMessage });
 }
 
 function pumpSendQueue() {
@@ -318,7 +359,7 @@ function promptLooksLikeSearch(prompt) {
     prompt.indexOf('web') !== -1;
 }
 
-function getLocationContext(callback) {
+function getLocationContext(generation, callback) {
   if (!getBoolSetting('EnableLocation', false)) {
     callback('Location access disabled.');
     return;
@@ -331,9 +372,15 @@ function getLocationContext(callback) {
 
   sendToWatch({ Status: 'Getting location...' });
   navigator.geolocation.getCurrentPosition(function(pos) {
+    if (generation !== requestGeneration) {
+      return;
+    }
     callback('User location: latitude ' + pos.coords.latitude + ', longitude ' + pos.coords.longitude +
       ', accuracy about ' + Math.round(pos.coords.accuracy || 0) + ' meters.');
   }, function(err) {
+    if (generation !== requestGeneration) {
+      return;
+    }
     callback('Location requested but unavailable: ' + err.message + '.');
   }, {
     enableHighAccuracy: false,
@@ -342,18 +389,17 @@ function getLocationContext(callback) {
   });
 }
 
-function callModel(messages, callback) {
+function callModel(messages, generation, callback) {
   var apiKey = getSetting('OpenRouterApiKey', '');
   var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
 
   if (!apiKey) {
-    sendToWatch({
-      Error: 'Open the Pebble phone app settings for AI Chat and enter your OpenRouter API key.'
-    });
+    showError('Open settings and add OpenRouter key.', 'Missing OpenRouter API key');
     return;
   }
 
   var request = new XMLHttpRequest();
+  trackRequest(request, generation);
   request.open('POST', OPENROUTER_URL, true);
   request.setRequestHeader('Content-Type', 'application/json');
   request.setRequestHeader('Accept', 'text/event-stream');
@@ -364,8 +410,12 @@ function callModel(messages, callback) {
   request.timeout = 60000;
 
   request.onload = function() {
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
     if (request.status < 200 || request.status >= 300) {
-      sendToWatch({ Error: 'OpenRouter error ' + request.status + ': ' + clip(request.responseText, 400) });
+      showError('OpenRouter failed (' + request.status + ').', clip(request.responseText, 500));
       return;
     }
 
@@ -374,16 +424,24 @@ function callModel(messages, callback) {
       var content = json.choices[0].message.content;
       callback(parseAssistantContent(content));
     } catch (err) {
-      sendToWatch({ Error: 'Bad OpenRouter response: ' + err.message });
+      showError('Bad AI response.', err.message);
     }
   };
 
   request.onerror = function() {
-    sendToWatch({ Error: 'Network error contacting OpenRouter.' });
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
+    showError('Check internet connection.', 'Network error contacting OpenRouter');
   };
 
   request.ontimeout = function() {
-    sendToWatch({ Error: 'OpenRouter request timed out.' });
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
+    showError('OpenRouter timed out.', 'OpenRouter request timed out');
   };
 
   request.send(JSON.stringify({
@@ -393,18 +451,17 @@ function callModel(messages, callback) {
   }));
 }
 
-function callModelStream(messages, callback) {
+function callModelStream(messages, generation, callback) {
   var apiKey = getSetting('OpenRouterApiKey', '');
   var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
 
   if (!apiKey) {
-    sendToWatch({
-      Error: 'Open the Pebble phone app settings for AI Chat and enter your OpenRouter API key.'
-    });
+    showError('Open settings and add OpenRouter key.', 'Missing OpenRouter API key');
     return;
   }
 
   var request = new XMLHttpRequest();
+  trackRequest(request, generation);
   var processedLength = 0;
   var pendingLine = '';
   var fullContent = '';
@@ -464,18 +521,25 @@ function callModelStream(messages, callback) {
   request.timeout = 60000;
 
   request.onprogress = function() {
+    if (!requestIsCurrent(request)) {
+      return;
+    }
     processNewText();
   };
 
   request.onreadystatechange = function() {
-    if (request.readyState === 3) {
+    if (request.readyState === 3 && requestIsCurrent(request)) {
       processNewText();
     }
   };
 
   request.onload = function() {
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
     if (request.status < 200 || request.status >= 300) {
-      sendToWatch({ Error: 'OpenRouter error ' + request.status + ': ' + clip(request.responseText, 400) });
+      showError('OpenRouter failed (' + request.status + ').', clip(request.responseText, 500));
       return;
     }
 
@@ -503,11 +567,19 @@ function callModelStream(messages, callback) {
   };
 
   request.onerror = function() {
-    sendToWatch({ Error: 'Network error contacting OpenRouter.' });
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
+    showError('Check internet connection.', 'Network error contacting OpenRouter');
   };
 
   request.ontimeout = function() {
-    sendToWatch({ Error: 'OpenRouter request timed out.' });
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
+    showError('OpenRouter timed out.', 'OpenRouter request timed out');
   };
 
   request.send(JSON.stringify({
@@ -518,23 +590,28 @@ function callModelStream(messages, callback) {
   }));
 }
 
-function braveSearch(query, callback) {
+function braveSearch(query, generation, callback) {
   var apiKey = getSetting('BraveSearchApiKey', '');
   if (!getBoolSetting('EnableSearch', false) || !apiKey) {
-    callback('Search unavailable: Brave Search is disabled or missing an API key.');
+    callback(null, 'Search unavailable. Add Brave key in settings.');
     return;
   }
 
   sendToWatch({ Status: 'Searching...' });
   var request = new XMLHttpRequest();
+  trackRequest(request, generation);
   request.open('GET', BRAVE_SEARCH_URL + '?count=' + MAX_SEARCH_RESULTS + '&q=' + encodeURIComponent(query), true);
   request.setRequestHeader('Accept', 'application/json');
   request.setRequestHeader('X-Subscription-Token', apiKey);
   request.timeout = 30000;
 
   request.onload = function() {
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
     if (request.status < 200 || request.status >= 300) {
-      callback('Search failed with HTTP ' + request.status + '.');
+      callback(null, 'Brave Search failed (' + request.status + ').');
       return;
     }
 
@@ -550,18 +627,26 @@ function braveSearch(query, callback) {
       if (results.length === 0) {
         lines.push('No results found.');
       }
-      callback(lines.join('\n'));
+      callback(lines.join('\n'), null);
     } catch (err) {
-      callback('Search response could not be parsed: ' + err.message + '.');
+      callback(null, 'Bad search response.');
     }
   };
 
   request.onerror = function() {
-    callback('Search network error.');
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
+    callback(null, 'Search network error.');
   };
 
   request.ontimeout = function() {
-    callback('Search timed out.');
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
+    callback(null, 'Search timed out.');
   };
 
   request.send();
@@ -589,25 +674,31 @@ function finishAssistantTurn(prompt, parsed, alreadySent) {
 }
 
 function callOpenRouter(prompt) {
+  requestGeneration++;
+  var generation = requestGeneration;
   sendToWatch({ Status: 'Thinking...' });
-  getLocationContext(function(locationContext) {
+  getLocationContext(generation, function(locationContext) {
     var searchAvailable = getBoolSetting('EnableSearch', false) && !!getSetting('BraveSearchApiKey', '');
     var contextText = locationContext + '\nSearch available: ' + (searchAvailable ? 'yes, request search with the search field when needed.' : 'no.') ;
     var firstMessages = buildMessages(prompt, contextText, null);
 
     if (!searchAvailable || !promptLooksLikeSearch(prompt)) {
-      callModelStream(firstMessages, function(parsed, alreadySent) {
+      callModelStream(firstMessages, generation, function(parsed, alreadySent) {
         finishAssistantTurn(prompt, parsed, alreadySent);
       });
       return;
     }
 
-    callModel(firstMessages, function(parsed) {
+    callModel(firstMessages, generation, function(parsed) {
       if (parsed.search) {
-        braveSearch(String(parsed.search), function(searchResultsText) {
+        braveSearch(String(parsed.search), generation, function(searchResultsText, searchError) {
+          if (searchError) {
+            showError(searchError, 'Search query: ' + parsed.search);
+            return;
+          }
           sendToWatch({ Status: 'Thinking...' });
           var secondMessages = buildMessages(prompt, contextText, searchResultsText);
-          callModelStream(secondMessages, function(finalParsed, alreadySent) {
+          callModelStream(secondMessages, generation, function(finalParsed, alreadySent) {
             finishAssistantTurn(prompt, finalParsed, alreadySent);
           });
         });
@@ -717,7 +808,13 @@ Pebble.addEventListener('ready', function() {
 });
 
 Pebble.addEventListener('appmessage', function(e) {
+  if (e.payload && e.payload.CancelRequest) {
+    cancelActiveRequests();
+    return;
+  }
+
   if (e.payload && e.payload.ClearSession) {
+    cancelActiveRequests();
     history = [];
     sendToWatch({ Status: 'New session' });
     return;

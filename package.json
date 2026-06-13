@@ -29,6 +29,7 @@
     "messageKeys": [
       "Prompt",
       "ClearSession",
+      "CancelRequest",
       "AssistantResponse",
       "ResponseChunkIndex",
       "ResponseChunkDone",

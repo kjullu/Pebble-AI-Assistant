@@ -21,10 +21,10 @@ module.exports = [
       {
         "type": "input",
         "messageKey": "OpenRouterModel",
-        "defaultValue": "openai/gpt-4o-mini",
+        "defaultValue": "moonshotai/kimi-k2.5",
         "label": "Model",
         "attributes": {
-          "placeholder": "openai/gpt-4o-mini"
+          "placeholder": "moonshotai/kimi-k2.5"
         }
       },
       {

@@ -14,7 +14,7 @@ Minimal Pebble Time 2/Core Devices watchapp for chatting with an AI assistant th
 Open the app settings in the Pebble phone app and set:
 
 - `OpenRouter API Key`: your OpenRouter key, usually `sk-or-v1-...`.
-- `Model`: any OpenRouter model id, for example `openai/gpt-4o-mini`.
+- `Model`: any OpenRouter model id, default `moonshotai/kimi-k2.5`.
 
 ## Build
 

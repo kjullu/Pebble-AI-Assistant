@@ -39,6 +39,7 @@ static void clear_watch_session(void) {
   s_last_prompt[0] = '\0';
   s_assistant_response[0] = '\0';
   s_chat_history[0] = '\0';
+  vibes_short_pulse();
   update_display("New session");
 }
 
@@ -241,6 +242,9 @@ static void send_prompt(const char *prompt) {
   result = app_message_outbox_send();
   if (result != APP_MSG_OK) {
     update_display("Send failed");
+    vibes_double_pulse();
+  } else {
+    vibes_short_pulse();
   }
 }
 
@@ -251,6 +255,7 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   Tuple *status_tuple = dict_find(iter, MESSAGE_KEY_Status);
   Tuple *response_tuple = dict_find(iter, MESSAGE_KEY_AssistantResponse);
   Tuple *chunk_index_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkIndex);
+  Tuple *chunk_done_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkDone);
   Tuple *error_tuple = dict_find(iter, MESSAGE_KEY_Error);
 
   //USR: Default status to Ready. if status_tuple- is set, then use that for status (as a string?)
@@ -290,6 +295,9 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
     append_chat_history("\nError\n");
     append_chat_history(error_tuple->value->cstring);
     status = "Error";
+    vibes_double_pulse();
+  } else if (chunk_done_tuple && chunk_done_tuple->value->int32 == 1) {
+    vibes_short_pulse();
   }
 
   //USR: Update text/display with new info
@@ -335,9 +343,30 @@ static void select_long_click_handler(ClickRecognizerRef recognizer, void *conte
   }
 }
 
+static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
+  update_display("Cancelling...");
+
+  DictionaryIterator *iter;
+  AppMessageResult result = app_message_outbox_begin(&iter);
+  if (result != APP_MSG_OK || !iter) {
+    update_display("Cancel failed");
+    vibes_double_pulse();
+    return;
+  }
+
+  dict_write_uint8(iter, MESSAGE_KEY_CancelRequest, 1);
+  dict_write_end(iter);
+  result = app_message_outbox_send();
+  if (result != APP_MSG_OK) {
+    update_display("Cancel failed");
+    vibes_double_pulse();
+  }
+}
+
 // The ScrollLayer installs UP/DOWN scrolling, then calls this so SELECT can be added.
 static void scroll_click_config_provider(void *context) {
   // Bind the SELECT button to our custom handler.
+  window_single_click_subscribe(BUTTON_ID_BACK, back_click_handler);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
   window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click_handler, NULL);
 }
