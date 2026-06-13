@@ -174,6 +174,70 @@ function parseAssistantContent(content) {
   }
 }
 
+function extractReplyFromPartialJson(content) {
+  var marker = '"reply"';
+  var markerIndex = content.indexOf(marker);
+  if (markerIndex === -1) {
+    return '';
+  }
+
+  var colonIndex = content.indexOf(':', markerIndex + marker.length);
+  if (colonIndex === -1) {
+    return '';
+  }
+
+  var quoteIndex = content.indexOf('"', colonIndex + 1);
+  if (quoteIndex === -1) {
+    return '';
+  }
+
+  var result = '';
+  var escaped = false;
+  for (var i = quoteIndex + 1; i < content.length; i++) {
+    var ch = content.charAt(i);
+    if (escaped) {
+      if (ch === 'n') {
+        result += '\n';
+      } else if (ch === 't') {
+        result += ' ';
+      } else {
+        result += ch;
+      }
+      escaped = false;
+    } else if (ch === '\\') {
+      escaped = true;
+    } else if (ch === '"') {
+      break;
+    } else {
+      result += ch;
+    }
+  }
+
+  return result;
+}
+
+function sendAssistantDelta(delta, chunkIndex, done) {
+  sendToWatch({
+    Status: done ? 'Done' : 'Receiving...',
+    AssistantResponse: delta,
+    ResponseChunkIndex: chunkIndex,
+    ResponseChunkDone: done ? 1 : 0
+  });
+}
+
+function promptLooksLikeSearch(prompt) {
+  prompt = String(prompt || '').toLowerCase();
+  return prompt.indexOf('search') !== -1 ||
+    prompt.indexOf('look up') !== -1 ||
+    prompt.indexOf('latest') !== -1 ||
+    prompt.indexOf('current') !== -1 ||
+    prompt.indexOf('news') !== -1 ||
+    prompt.indexOf('today') !== -1 ||
+    prompt.indexOf('right now') !== -1 ||
+    prompt.indexOf('weather') !== -1 ||
+    prompt.indexOf('web') !== -1;
+}
+
 function getLocationContext(callback) {
   if (!getBoolSetting('EnableLocation', false)) {
     callback('Location access disabled.');
@@ -212,6 +276,8 @@ function callModel(messages, callback) {
   var request = new XMLHttpRequest();
   request.open('POST', OPENROUTER_URL, true);
   request.setRequestHeader('Content-Type', 'application/json');
+  request.setRequestHeader('Accept', 'text/event-stream');
+  request.setRequestHeader('Cache-Control', 'no-cache');
   request.setRequestHeader('Authorization', 'Bearer ' + apiKey);
   request.setRequestHeader('HTTP-Referer', 'https://repebble.com/');
   request.setRequestHeader('X-Title', 'Pebble AI Chat');
@@ -244,6 +310,131 @@ function callModel(messages, callback) {
     model: model,
     messages: messages,
     temperature: 0.2
+  }));
+}
+
+function callModelStream(messages, callback) {
+  var apiKey = getSetting('OpenRouterApiKey', '');
+  var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
+
+  if (!apiKey) {
+    sendToWatch({
+      Error: 'Open the Pebble phone app settings for AI Chat and enter your OpenRouter API key.'
+    });
+    return;
+  }
+
+  var request = new XMLHttpRequest();
+  var processedLength = 0;
+  var pendingLine = '';
+  var fullContent = '';
+  var sentReplyLength = 0;
+  var chunkIndex = 0;
+  var sentAnyChunk = false;
+
+  function processSseLine(line) {
+    line = line.replace(/^\s+|\s+$/g, '');
+    if (line.indexOf('data:') !== 0) {
+      return;
+    }
+
+    var data = line.substring(5).replace(/^\s+|\s+$/g, '');
+    if (!data || data === '[DONE]') {
+      return;
+    }
+
+    try {
+      var json = JSON.parse(data);
+      var delta = json.choices && json.choices[0] && json.choices[0].delta;
+      var contentDelta = delta && delta.content ? delta.content : '';
+      if (!contentDelta) {
+        return;
+      }
+
+      fullContent += contentDelta;
+      var replySoFar = extractReplyFromPartialJson(fullContent);
+      if (replySoFar.length > sentReplyLength) {
+        var newText = replySoFar.substring(sentReplyLength);
+        sendAssistantDelta(newText, chunkIndex++, false);
+        sentAnyChunk = true;
+        sentReplyLength = replySoFar.length;
+      }
+    } catch (err) {
+      console.log('Could not parse stream line: ' + err.message);
+    }
+  }
+
+  function processNewText() {
+    var newText = request.responseText.substring(processedLength);
+    processedLength = request.responseText.length;
+    pendingLine += newText;
+
+    var lines = pendingLine.split('\n');
+    pendingLine = lines.pop();
+    for (var i = 0; i < lines.length; i++) {
+      processSseLine(lines[i]);
+    }
+  }
+
+  request.open('POST', OPENROUTER_URL, true);
+  request.setRequestHeader('Content-Type', 'application/json');
+  request.setRequestHeader('Authorization', 'Bearer ' + apiKey);
+  request.setRequestHeader('HTTP-Referer', 'https://repebble.com/');
+  request.setRequestHeader('X-Title', 'Pebble AI Chat');
+  request.timeout = 60000;
+
+  request.onprogress = function() {
+    processNewText();
+  };
+
+  request.onreadystatechange = function() {
+    if (request.readyState === 3) {
+      processNewText();
+    }
+  };
+
+  request.onload = function() {
+    if (request.status < 200 || request.status >= 300) {
+      sendToWatch({ Error: 'OpenRouter error ' + request.status + ': ' + clip(request.responseText, 400) });
+      return;
+    }
+
+    processNewText();
+    if (pendingLine) {
+      processSseLine(pendingLine);
+      pendingLine = '';
+    }
+
+    var parsed = parseAssistantContent(fullContent);
+    var finalReply = parsed.reply || extractReplyFromPartialJson(fullContent) || 'No response.';
+    if (!sentAnyChunk) {
+      sendAssistantDelta(finalReply, 0, true);
+      sentAnyChunk = true;
+    } else {
+      var missingText = finalReply.substring(sentReplyLength);
+      if (missingText) {
+        sendAssistantDelta(missingText, chunkIndex++, false);
+      }
+      sendAssistantDelta('', chunkIndex, true);
+    }
+
+    parsed.reply = finalReply;
+    callback(parsed, true);
+  };
+
+  request.onerror = function() {
+    sendToWatch({ Error: 'Network error contacting OpenRouter.' });
+  };
+
+  request.ontimeout = function() {
+    sendToWatch({ Error: 'OpenRouter request timed out.' });
+  };
+
+  request.send(JSON.stringify({
+    model: model,
+    messages: messages,
+    temperature: 0.2,
+    stream: true
   }));
 }
 
@@ -296,7 +487,7 @@ function braveSearch(query, callback) {
   request.send();
 }
 
-function finishAssistantTurn(prompt, parsed) {
+function finishAssistantTurn(prompt, parsed, alreadySent) {
   var reply = parsed.reply || 'No response.';
   history.push({ role: 'user', content: prompt });
   history.push({ role: 'assistant', content: reply });
@@ -304,7 +495,9 @@ function finishAssistantTurn(prompt, parsed) {
     history = history.slice(history.length - 12);
   }
 
-  sendAssistantReply(reply);
+  if (!alreadySent) {
+    sendAssistantReply(reply);
+  }
 
   if (parsed.timeline) {
     addTimelinePin(parsed.timeline);
@@ -318,17 +511,24 @@ function callOpenRouter(prompt) {
     var contextText = locationContext + '\nSearch available: ' + (searchAvailable ? 'yes, request search with the search field when needed.' : 'no.') ;
     var firstMessages = buildMessages(prompt, contextText, null);
 
+    if (!searchAvailable || !promptLooksLikeSearch(prompt)) {
+      callModelStream(firstMessages, function(parsed, alreadySent) {
+        finishAssistantTurn(prompt, parsed, alreadySent);
+      });
+      return;
+    }
+
     callModel(firstMessages, function(parsed) {
-      if (parsed.search && searchAvailable) {
+      if (parsed.search) {
         braveSearch(String(parsed.search), function(searchResultsText) {
           sendToWatch({ Status: 'Thinking...' });
           var secondMessages = buildMessages(prompt, contextText, searchResultsText);
-          callModel(secondMessages, function(finalParsed) {
-            finishAssistantTurn(prompt, finalParsed);
+          callModelStream(secondMessages, function(finalParsed, alreadySent) {
+            finishAssistantTurn(prompt, finalParsed, alreadySent);
           });
         });
       } else {
-        finishAssistantTurn(prompt, parsed);
+        finishAssistantTurn(prompt, parsed, false);
       }
     });
   });
