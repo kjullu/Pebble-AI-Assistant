@@ -49,6 +49,24 @@ module.exports = [
       },
       {
         "type": "input",
+        "messageKey": "TtsModel",
+        "defaultValue": "hexgrad/kokoro-82m",
+        "label": "TTS Model",
+        "attributes": {
+          "placeholder": "hexgrad/kokoro-82m"
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "TtsVoice",
+        "defaultValue": "af_alloy",
+        "label": "TTS Voice",
+        "attributes": {
+          "placeholder": "af_alloy"
+        }
+      },
+      {
+        "type": "input",
         "messageKey": "ExtraSystemPrompt",
         "label": "Extra System Prompt",
         "description": "Optional extra instructions added after the built-in prompt.",

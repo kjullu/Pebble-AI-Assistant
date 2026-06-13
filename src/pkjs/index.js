@@ -12,8 +12,8 @@ var RESPONSE_CHUNK_CHARS = 700;
 var MAX_SEARCH_RESULTS = 3;
 var MAX_NOTES = 30;
 var MAX_NOTE_CHARS = 240;
-var TTS_MODEL = 'openai/gpt-4o-mini-tts-2025-12-15';
-var TTS_VOICE = 'alloy';
+var DEFAULT_TTS_MODEL = 'hexgrad/kokoro-82m';
+var DEFAULT_TTS_VOICE = 'af_alloy';
 var TTS_CHUNK_BYTES = 512;
 
 var history = [];
@@ -98,6 +98,8 @@ function downsample24k16To16k16(arrayBuffer) {
 
 function requestTts() {
   var apiKey = getSetting('OpenRouterApiKey', '');
+  var ttsModel = getSetting('TtsModel', DEFAULT_TTS_MODEL);
+  var ttsVoice = getSetting('TtsVoice', DEFAULT_TTS_VOICE);
   var text = clip(latestAssistantReply || '', 1200);
 
   if (!text) {
@@ -128,7 +130,7 @@ function requestTts() {
       return;
     }
     if (request.status < 200 || request.status >= 300) {
-      showError('TTS failed (' + request.status + ').', 'OpenRouter TTS failed');
+      showError('TTS failed (' + request.status + ').', 'OpenRouter TTS failed using ' + ttsModel + ' voice ' + ttsVoice);
       return;
     }
 
@@ -154,9 +156,9 @@ function requestTts() {
   };
 
   request.send(JSON.stringify({
-    model: TTS_MODEL,
+    model: ttsModel,
     input: text,
-    voice: TTS_VOICE,
+    voice: ttsVoice,
     response_format: 'pcm'
   }));
 }
@@ -306,6 +308,8 @@ function saveSettings(convertedSettings, rawSettings) {
   var braveApiKey = settingValue(convertedSettings, rawSettings, 'BraveSearchApiKey', messageKeys.BraveSearchApiKey);
   var extraSystemPrompt = settingValue(convertedSettings, rawSettings, 'ExtraSystemPrompt', messageKeys.ExtraSystemPrompt);
   var notesMemoryText = settingValue(convertedSettings, rawSettings, 'NotesMemoryText', messageKeys.NotesMemoryText);
+  var ttsModel = settingValue(convertedSettings, rawSettings, 'TtsModel', messageKeys.TtsModel);
+  var ttsVoice = settingValue(convertedSettings, rawSettings, 'TtsVoice', messageKeys.TtsVoice);
 
   if (apiKey !== undefined) {
     localStorage.setItem('OpenRouterApiKey', String(apiKey).trim());
@@ -327,6 +331,12 @@ function saveSettings(convertedSettings, rawSettings) {
   }
   if (notesMemoryText !== undefined) {
     saveNotesFromText(notesMemoryText);
+  }
+  if (ttsModel !== undefined && String(ttsModel).trim() !== '') {
+    localStorage.setItem('TtsModel', String(ttsModel).trim());
+  }
+  if (ttsVoice !== undefined && String(ttsVoice).trim() !== '') {
+    localStorage.setItem('TtsVoice', String(ttsVoice).trim());
   }
 }
 
@@ -939,7 +949,9 @@ Pebble.addEventListener('showConfiguration', function() {
     OpenRouterModel: getSetting('OpenRouterModel', DEFAULT_MODEL),
     EnableLocation: getBoolSetting('EnableLocation', false),
     EnableSearch: getBoolSetting('EnableSearch', false),
-    BraveSearchApiKey: getSetting('BraveSearchApiKey', '')
+    BraveSearchApiKey: getSetting('BraveSearchApiKey', ''),
+    TtsModel: getSetting('TtsModel', DEFAULT_TTS_MODEL),
+    TtsVoice: getSetting('TtsVoice', DEFAULT_TTS_VOICE)
   });
   Pebble.openURL(clay.generateUrl());
 });

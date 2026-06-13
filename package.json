@@ -45,7 +45,9 @@
       "EnableSearch",
       "BraveSearchApiKey",
       "ExtraSystemPrompt",
-      "NotesMemoryText"
+      "NotesMemoryText",
+      "TtsModel",
+      "TtsVoice"
     ],
     "resources": {
       "media": []
