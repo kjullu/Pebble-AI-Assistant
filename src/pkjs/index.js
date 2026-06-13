@@ -194,6 +194,20 @@ function incrementStat(key) {
   saveMonthlyStats(stats);
 }
 
+function saveEditableStats(usedCredits, messages, searches) {
+  var stats = getMonthlyStats();
+  if (usedCredits !== undefined && String(usedCredits).trim() !== '') {
+    stats.usageCredits = Number(usedCredits) || 0;
+  }
+  if (messages !== undefined && String(messages).trim() !== '') {
+    stats.messages = Number(messages) || 0;
+  }
+  if (searches !== undefined && String(searches).trim() !== '') {
+    stats.searches = Number(searches) || 0;
+  }
+  saveMonthlyStats(stats);
+}
+
 function formatCredits(value) {
   value = Number(value || 0);
   if (value < 0.01) {
@@ -371,6 +385,9 @@ function saveSettings(convertedSettings, rawSettings) {
   var braveApiKey = settingValue(convertedSettings, rawSettings, 'BraveSearchApiKey', messageKeys.BraveSearchApiKey);
   var extraSystemPrompt = settingValue(convertedSettings, rawSettings, 'ExtraSystemPrompt', messageKeys.ExtraSystemPrompt);
   var notesMemoryText = settingValue(convertedSettings, rawSettings, 'NotesMemoryText', messageKeys.NotesMemoryText);
+  var statsUsedCredits = settingValue(convertedSettings, rawSettings, 'StatsUsedCredits', messageKeys.StatsUsedCredits);
+  var statsMessages = settingValue(convertedSettings, rawSettings, 'StatsMessages', messageKeys.StatsMessages);
+  var statsSearches = settingValue(convertedSettings, rawSettings, 'StatsSearches', messageKeys.StatsSearches);
 
   if (apiKey !== undefined) {
     localStorage.setItem('OpenRouterApiKey', String(apiKey).trim());
@@ -396,6 +413,7 @@ function saveSettings(convertedSettings, rawSettings) {
   if (notesMemoryText !== undefined) {
     saveNotesFromText(notesMemoryText);
   }
+  saveEditableStats(statsUsedCredits, statsMessages, statsSearches);
 }
 
 function buildSystemPrompt() {
@@ -1094,8 +1112,12 @@ Pebble.addEventListener('appmessage', function(e) {
 });
 
 Pebble.addEventListener('showConfiguration', function() {
+  var stats = getMonthlyStats();
   clay.setSettings({
     NotesMemoryText: notesToText(),
+    StatsUsedCredits: String(stats.usageCredits || 0),
+    StatsMessages: String(stats.messages || 0),
+    StatsSearches: String(stats.searches || 0),
     ExtraSystemPrompt: getSetting('ExtraSystemPrompt', ''),
     OpenRouterApiKey: getSetting('OpenRouterApiKey', ''),
     OpenRouterModel: getSetting('OpenRouterModel', DEFAULT_MODEL),

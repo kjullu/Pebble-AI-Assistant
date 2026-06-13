@@ -73,6 +73,33 @@ module.exports = [
       },
       {
         "type": "input",
+        "messageKey": "StatsUsedCredits",
+        "label": "Used Credits This Month",
+        "description": "Editable counter for the home screen. Set to 0 to reset.",
+        "attributes": {
+          "placeholder": "0"
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "StatsMessages",
+        "label": "Messages This Month",
+        "description": "Editable counter for the home screen. Set to 0 to reset.",
+        "attributes": {
+          "placeholder": "0"
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "StatsSearches",
+        "label": "Searches This Month",
+        "description": "Editable counter for the home screen. Set to 0 to reset.",
+        "attributes": {
+          "placeholder": "0"
+        }
+      },
+      {
+        "type": "input",
         "messageKey": "DebugLog",
         "label": "Debug Log",
         "description": "Copy this when reporting bugs. It is read-only-ish; saving may overwrite it until the next log line.",

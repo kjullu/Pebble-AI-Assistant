@@ -47,6 +47,9 @@
       "BraveSearchApiKey",
       "ExtraSystemPrompt",
       "NotesMemoryText",
+      "StatsUsedCredits",
+      "StatsMessages",
+      "StatsSearches",
       "DebugLog"
     ],
     "resources": {
