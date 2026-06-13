@@ -15,7 +15,8 @@
     "sdkVersion": "3",
     "enableMultiJS": true,
     "capabilities": [
-      "configurable"
+      "configurable",
+      "location"
     ],
     "targetPlatforms": [
       "basalt",
@@ -33,7 +34,10 @@
       "Status",
       "Error",
       "OpenRouterApiKey",
-      "OpenRouterModel"
+      "OpenRouterModel",
+      "EnableLocation",
+      "EnableSearch",
+      "BraveSearchApiKey"
     ],
     "resources": {
       "media": []

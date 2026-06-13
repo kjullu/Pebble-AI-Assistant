@@ -1,22 +1,103 @@
 #include <pebble.h>
 
+//AI: Small spacing values used to lay out the Bobby-like stacked chat view.
+#define PADDING 5
+#define LABEL_HEIGHT 18
+
 // Max characters Pebble dictation should store for one spoken prompt.
 #define DICTATION_BUFFER_SIZE 512
-// Large enough to hold the full text currently shown in the text layer.
-#define DISPLAY_BUFFER_SIZE 8192
 // Stores the accumulated assistant reply received from the phone.
 #define RESPONSE_BUFFER_SIZE 6144
 
 // Pointers to Pebble UI/session objects created at runtime.
 static Window *s_window;
 static ScrollLayer *s_scroll_layer;
-static TextLayer *s_text_layer;
+static StatusBarLayer *s_status_layer;
+static Layer *s_scroll_indicator_down;
+static TextLayer *s_prompt_label_layer;
+static TextLayer *s_prompt_layer;
+static TextLayer *s_assistant_label_layer;
+static TextLayer *s_assistant_layer;
+static TextLayer *s_status_message_layer;
+static TextLayer *s_empty_layer;
 static DictationSession *s_dictation_session;
 
 // These buffers hold the current conversation state shown in the single text view.
 static char s_last_prompt[DICTATION_BUFFER_SIZE];
 static char s_assistant_response[RESPONSE_BUFFER_SIZE];
-static char s_display_text[DISPLAY_BUFFER_SIZE];
+static char s_status_text[64];
+
+//AI: Configure a small label layer like Bobby's speaker labels.
+static void configure_label_layer(TextLayer *layer, const char *text) {
+  text_layer_set_text(layer, text);
+  text_layer_set_font(layer, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD));
+  text_layer_set_text_color(layer, GColorBlack);
+  text_layer_set_background_color(layer, GColorClear);
+}
+
+//AI: Configure a larger message body layer.
+static void configure_message_layer(TextLayer *layer) {
+  text_layer_set_font(layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_text_color(layer, GColorBlack);
+  text_layer_set_background_color(layer, GColorClear);
+  text_layer_set_overflow_mode(layer, GTextOverflowModeWordWrap);
+}
+
+//AI: Resize one message TextLayer to fit its current text and return its height.
+static int16_t resize_text_layer(TextLayer *layer, int16_t y, int16_t width) {
+  layer_set_frame(text_layer_get_layer(layer), GRect(PADDING, y, width - (PADDING * 2), 2000));
+  GSize size = text_layer_get_content_size(layer);
+  int16_t height = size.h + PADDING;
+  text_layer_set_size(layer, GSize(width - (PADDING * 2), height));
+  return height;
+}
+
+//AI: Bobby uses separate stacked segments; this lays out our minimal prompt/assistant segments.
+static void layout_chat(bool scroll_to_bottom) {
+  if (!s_scroll_layer || !s_prompt_layer || !s_assistant_layer) {
+    return;
+  }
+
+  Layer *scroll_root = scroll_layer_get_layer(s_scroll_layer);
+  GRect bounds = layer_get_bounds(scroll_root);
+  int16_t width = bounds.size.w;
+  int16_t y = PADDING;
+
+  bool has_prompt = s_last_prompt[0] != '\0';
+  bool has_response = s_assistant_response[0] != '\0';
+  bool show_status_message = strcmp(s_status_text, "Ready") != 0 && strcmp(s_status_text, "Done") != 0 && !has_response;
+
+  layer_set_hidden(text_layer_get_layer(s_empty_layer), has_prompt || has_response || show_status_message);
+  layer_set_hidden(text_layer_get_layer(s_prompt_label_layer), !has_prompt);
+  layer_set_hidden(text_layer_get_layer(s_prompt_layer), !has_prompt);
+  layer_set_hidden(text_layer_get_layer(s_assistant_label_layer), !has_response);
+  layer_set_hidden(text_layer_get_layer(s_assistant_layer), !has_response);
+  layer_set_hidden(text_layer_get_layer(s_status_message_layer), !show_status_message);
+
+  if (has_prompt) {
+    layer_set_frame(text_layer_get_layer(s_prompt_label_layer), GRect(PADDING, y, width - (PADDING * 2), LABEL_HEIGHT));
+    y += LABEL_HEIGHT;
+    y += resize_text_layer(s_prompt_layer, y, width);
+  }
+
+  if (has_response) {
+    y += PADDING;
+    layer_set_frame(text_layer_get_layer(s_assistant_label_layer), GRect(PADDING, y, width - (PADDING * 2), LABEL_HEIGHT));
+    y += LABEL_HEIGHT;
+    y += resize_text_layer(s_assistant_layer, y, width);
+  } else if (show_status_message) {
+    y += PADDING;
+    text_layer_set_text(s_status_message_layer, s_status_text);
+    y += resize_text_layer(s_status_message_layer, y, width);
+  }
+
+  int16_t content_height = has_prompt || has_response ? y + PADDING : bounds.size.h;
+  scroll_layer_set_content_size(s_scroll_layer, GSize(width, content_height));
+
+  if (scroll_to_bottom && content_height > bounds.size.h) {
+    scroll_layer_set_content_offset(s_scroll_layer, GPoint(0, -(content_height - bounds.size.h)), false);
+  }
+}
 
 // Long assistant replies arrive from the phone as multiple AppMessage chunks.
 static void append_response_chunk(const char *chunk) {
@@ -30,21 +111,13 @@ static void append_response_chunk(const char *chunk) {
 
 // Rebuild the full screen text whenever prompt, status, or response changes.
 static void update_display(const char *status) {
-  // Fall back to helpful placeholder text before the user has spoken or received a reply.
-  const char *prompt = s_last_prompt[0] ? s_last_prompt : "Press SELECT and speak.";
-  const char *response = s_assistant_response[0] ? s_assistant_response : "No response yet.";
-
-  // Build the single scrollable text blob shown in the app.
-  snprintf(s_display_text, sizeof(s_display_text),
-           "%s\n\nYou:\n%s\n\nAssistant:\n%s\n\nSELECT: speak\nUP/DOWN: scroll",
-           status ? status : "Ready", prompt, response);
-
-  // Push the new text into the layer and resize scrolling to fit it.
-  text_layer_set_text(s_text_layer, s_display_text);
-  GSize content_size = text_layer_get_content_size(s_text_layer);
-  text_layer_set_size(s_text_layer, GSize(content_size.w, content_size.h + 8));
-  scroll_layer_set_content_size(s_scroll_layer, GSize(content_size.w, content_size.h + 8));
-  scroll_layer_set_content_offset(s_scroll_layer, GPointZero, false);
+  //AI: The status is shown in the top status bar, while messages live in the scroll layer.
+  snprintf(s_status_text, sizeof(s_status_text), "%s", status ? status : "Ready");
+  status_bar_layer_set_separator_mode(s_status_layer, StatusBarLayerSeparatorModeDotted);
+  status_bar_layer_set_colors(s_status_layer, GColorWhite, GColorBlack);
+  text_layer_set_text(s_prompt_layer, s_last_prompt);
+  text_layer_set_text(s_assistant_layer, s_assistant_response);
+  layout_chat(true);
 }
 
 // Send the user's dictated text to PebbleKit JS on the phone.
@@ -158,20 +231,70 @@ static void window_load(Window *window) {
   Layer *window_layer = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(window_layer);
 
+  //AI: Add a top status bar like Bobby's session screen.
+  s_status_layer = status_bar_layer_create();
+  status_bar_layer_set_colors(s_status_layer, GColorWhite, GColorBlack);
+  status_bar_layer_set_separator_mode(s_status_layer, StatusBarLayerSeparatorModeDotted);
+  layer_add_child(window_layer, status_bar_layer_get_layer(s_status_layer));
+
+  //AI: The bottom layer is used by Pebble's content indicator to show more content below.
+  s_scroll_indicator_down = layer_create(GRect(0, bounds.size.h - STATUS_BAR_LAYER_HEIGHT, bounds.size.w, STATUS_BAR_LAYER_HEIGHT));
+
   // Create a ScrollLayer so long responses can be read with UP/DOWN.
-  s_scroll_layer = scroll_layer_create(bounds);
+  s_scroll_layer = scroll_layer_create(GRect(0, STATUS_BAR_LAYER_HEIGHT, bounds.size.w, bounds.size.h - STATUS_BAR_LAYER_HEIGHT));
+  scroll_layer_set_shadow_hidden(s_scroll_layer, true);
   scroll_layer_set_callbacks(s_scroll_layer, (ScrollLayerCallbacks) {
     .click_config_provider = scroll_click_config_provider
   });
   scroll_layer_set_click_config_onto_window(s_scroll_layer, window);
   layer_add_child(window_layer, scroll_layer_get_layer(s_scroll_layer));
 
-  // Create one large TextLayer inside the scroll layer to hold the whole conversation.
-  s_text_layer = text_layer_create(GRect(4, 0, bounds.size.w - 8, 2000));
-  text_layer_set_font(s_text_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-  text_layer_set_text_color(s_text_layer, GColorBlack);
-  text_layer_set_background_color(s_text_layer, GColorWhite);
-  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_text_layer));
+  //AI: Configure Bobby-like up/down scroll indicators in the status and bottom indicator layers.
+  ContentIndicator *indicator = scroll_layer_get_content_indicator(s_scroll_layer);
+  ContentIndicatorConfig up_config = (ContentIndicatorConfig) {
+    .layer = status_bar_layer_get_layer(s_status_layer),
+    .times_out = true,
+    .alignment = GAlignCenter,
+    .colors = { .foreground = GColorBlack, .background = GColorWhite }
+  };
+  content_indicator_configure_direction(indicator, ContentIndicatorDirectionUp, &up_config);
+  ContentIndicatorConfig down_config = (ContentIndicatorConfig) {
+    .layer = s_scroll_indicator_down,
+    .times_out = true,
+    .alignment = GAlignCenter,
+    .colors = { .foreground = GColorBlack, .background = GColorWhite }
+  };
+  content_indicator_configure_direction(indicator, ContentIndicatorDirectionDown, &down_config);
+
+  //AI: Create separate label/body layers instead of one giant text blob.
+  s_empty_layer = text_layer_create(GRect(PADDING, PADDING, bounds.size.w - (PADDING * 2), 80));
+  configure_message_layer(s_empty_layer);
+  text_layer_set_text(s_empty_layer, "SELECT: speak\nUP/DOWN: scroll");
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_empty_layer));
+
+  s_prompt_label_layer = text_layer_create(GRectZero);
+  configure_label_layer(s_prompt_label_layer, "You");
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_prompt_label_layer));
+
+  s_prompt_layer = text_layer_create(GRectZero);
+  configure_message_layer(s_prompt_layer);
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_prompt_layer));
+
+  s_assistant_label_layer = text_layer_create(GRectZero);
+  configure_label_layer(s_assistant_label_layer, "Assistant");
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_assistant_label_layer));
+
+  s_assistant_layer = text_layer_create(GRectZero);
+  configure_message_layer(s_assistant_layer);
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_assistant_layer));
+
+  s_status_message_layer = text_layer_create(GRectZero);
+  configure_message_layer(s_status_message_layer);
+  text_layer_set_text_color(s_status_message_layer, GColorDarkGray);
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_status_message_layer));
+
+  //AI: This must be added after the scroll layer so the down indicator appears on top.
+  layer_add_child(window_layer, s_scroll_indicator_down);
 
   // Show the initial idle screen.
   update_display("Ready");
@@ -180,7 +303,14 @@ static void window_load(Window *window) {
 // Destroy UI objects created in window_load().
 static void window_unload(Window *window) {
   // These objects were heap-allocated in window_load(), so they must be destroyed here.
-  text_layer_destroy(s_text_layer);
+  text_layer_destroy(s_empty_layer);
+  text_layer_destroy(s_prompt_label_layer);
+  text_layer_destroy(s_prompt_layer);
+  text_layer_destroy(s_assistant_label_layer);
+  text_layer_destroy(s_assistant_layer);
+  text_layer_destroy(s_status_message_layer);
+  status_bar_layer_destroy(s_status_layer);
+  layer_destroy(s_scroll_indicator_down);
   scroll_layer_destroy(s_scroll_layer);
 }
 
@@ -203,7 +333,7 @@ static void init(void) {
 
   s_dictation_session = dictation_session_create(DICTATION_BUFFER_SIZE, dictation_callback, NULL); //USR: Start the dictation deamon? with a buffersize?
   //AI: Create a dictation session; Pebble will call dictation_callback when speech recognition finishes.
-  dictation_session_enable_confirmation(s_dictation_session, true); // Purposly set to true
+  dictation_session_enable_confirmation(s_dictation_session, false); // Purposly set to false
 }
 
 // Release resources before the app exits.

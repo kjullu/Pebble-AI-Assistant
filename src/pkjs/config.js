@@ -26,6 +26,26 @@ module.exports = [
         "attributes": {
           "placeholder": "openai/gpt-4o-mini"
         }
+      },
+      {
+        "type": "toggle",
+        "messageKey": "EnableLocation",
+        "label": "Give AI Location",
+        "defaultValue": false
+      },
+      {
+        "type": "toggle",
+        "messageKey": "EnableSearch",
+        "label": "Enable Brave Search",
+        "defaultValue": false
+      },
+      {
+        "type": "input",
+        "messageKey": "BraveSearchApiKey",
+        "label": "Brave Search API Key",
+        "attributes": {
+          "placeholder": "Brave API key"
+        }
       }
     ]
   },

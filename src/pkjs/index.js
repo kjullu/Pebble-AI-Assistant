@@ -4,9 +4,11 @@ var clayConfig = require('./config');
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
 var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+var BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 var TIMELINE_URL = 'https://timeline-api.getpebble.com/v1/user/pins/';
 var DEFAULT_MODEL = 'openai/gpt-4o-mini';
 var RESPONSE_CHUNK_CHARS = 700;
+var MAX_SEARCH_RESULTS = 3;
 
 var history = [];
 var sendQueue = [];
@@ -70,6 +72,11 @@ function getSetting(key, fallback) {
   return value;
 }
 
+function getBoolSetting(key, fallback) {
+  var value = getSetting(key, fallback ? '1' : '0');
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
 function settingValue(convertedSettings, rawSettings, name, numericKey) {
   if (rawSettings && rawSettings[name] !== undefined) {
     return rawSettings[name] && rawSettings[name].value !== undefined ? rawSettings[name].value : rawSettings[name];
@@ -86,6 +93,9 @@ function settingValue(convertedSettings, rawSettings, name, numericKey) {
 function saveSettings(convertedSettings, rawSettings) {
   var apiKey = settingValue(convertedSettings, rawSettings, 'OpenRouterApiKey', messageKeys.OpenRouterApiKey);
   var model = settingValue(convertedSettings, rawSettings, 'OpenRouterModel', messageKeys.OpenRouterModel);
+  var enableLocation = settingValue(convertedSettings, rawSettings, 'EnableLocation', messageKeys.EnableLocation);
+  var enableSearch = settingValue(convertedSettings, rawSettings, 'EnableSearch', messageKeys.EnableSearch);
+  var braveApiKey = settingValue(convertedSettings, rawSettings, 'BraveSearchApiKey', messageKeys.BraveSearchApiKey);
 
   if (apiKey !== undefined) {
     localStorage.setItem('OpenRouterApiKey', String(apiKey).trim());
@@ -93,25 +103,44 @@ function saveSettings(convertedSettings, rawSettings) {
   if (model !== undefined && String(model).trim() !== '') {
     localStorage.setItem('OpenRouterModel', String(model).trim());
   }
+  if (enableLocation !== undefined) {
+    localStorage.setItem('EnableLocation', String(enableLocation ? 1 : 0));
+  }
+  if (enableSearch !== undefined) {
+    localStorage.setItem('EnableSearch', String(enableSearch ? 1 : 0));
+  }
+  if (braveApiKey !== undefined) {
+    localStorage.setItem('BraveSearchApiKey', String(braveApiKey).trim());
+  }
 }
 
 function buildSystemPrompt() {
   return [
     'You are a concise assistant running on a Pebble watch.',
     'Always return only valid JSON with this shape:',
-    '{"reply":"short user-visible answer","timeline":null}',
+    '{"reply":"short user-visible answer","timeline":null,"search":null}',
+    'If you need current web information and search is available, return {"reply":"Searching...","timeline":null,"search":"short search query"}.',
+    'Only request search once per user question. After search results are provided, answer from those results and set search to null.',
     'If the user asks you to add, schedule, remind, or put something on the timeline, set timeline to:',
     '{"title":"short title","time":"ISO-8601 UTC date-time","body":"details","durationMinutes":30,"reminderMinutes":10}',
     'Use the current time for relative dates. If a time is ambiguous, ask a short clarifying question and set timeline to null.',
-    'Keep replies practical for a watch display unless the user asks for detail.'
+    'Keep replies practical for a watch display unless the user asks for detail.',
+    'You should generally use 24h time when talking to the user.'
   ].join(' ');
 }
 
-function buildMessages(prompt) {
+function buildMessages(prompt, contextText, searchResultsText) {
   var messages = [
     { role: 'system', content: buildSystemPrompt() },
     { role: 'system', content: 'Current time is ' + new Date().toISOString() + '.' }
   ];
+
+  if (contextText) {
+    messages.push({ role: 'system', content: contextText });
+  }
+  if (searchResultsText) {
+    messages.push({ role: 'system', content: searchResultsText });
+  }
 
   var start = Math.max(0, history.length - 6);
   for (var i = start; i < history.length; i++) {
@@ -133,17 +162,43 @@ function parseAssistantContent(content) {
     var parsed = JSON.parse(text);
     return {
       reply: String(parsed.reply || ''),
-      timeline: parsed.timeline || null
+      timeline: parsed.timeline || null,
+      search: parsed.search || null
     };
   } catch (err) {
     return {
       reply: String(content || ''),
-      timeline: null
+      timeline: null,
+      search: null
     };
   }
 }
 
-function callOpenRouter(prompt) {
+function getLocationContext(callback) {
+  if (!getBoolSetting('EnableLocation', false)) {
+    callback('Location access disabled.');
+    return;
+  }
+
+  if (!navigator.geolocation || !navigator.geolocation.getCurrentPosition) {
+    callback('Location unavailable on this phone.');
+    return;
+  }
+
+  sendToWatch({ Status: 'Getting location...' });
+  navigator.geolocation.getCurrentPosition(function(pos) {
+    callback('User location: latitude ' + pos.coords.latitude + ', longitude ' + pos.coords.longitude +
+      ', accuracy about ' + Math.round(pos.coords.accuracy || 0) + ' meters.');
+  }, function(err) {
+    callback('Location requested but unavailable: ' + err.message + '.');
+  }, {
+    enableHighAccuracy: false,
+    maximumAge: 10 * 60 * 1000,
+    timeout: 10000
+  });
+}
+
+function callModel(messages, callback) {
   var apiKey = getSetting('OpenRouterApiKey', '');
   var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
 
@@ -153,8 +208,6 @@ function callOpenRouter(prompt) {
     });
     return;
   }
-
-  sendToWatch({ Status: 'Thinking...' });
 
   var request = new XMLHttpRequest();
   request.open('POST', OPENROUTER_URL, true);
@@ -173,20 +226,7 @@ function callOpenRouter(prompt) {
     try {
       var json = JSON.parse(request.responseText);
       var content = json.choices[0].message.content;
-      var parsed = parseAssistantContent(content);
-      var reply = parsed.reply || 'No response.';
-
-      history.push({ role: 'user', content: prompt });
-      history.push({ role: 'assistant', content: reply });
-      if (history.length > 12) {
-        history = history.slice(history.length - 12);
-      }
-
-      sendAssistantReply(reply);
-
-      if (parsed.timeline) {
-        addTimelinePin(parsed.timeline);
-      }
+      callback(parseAssistantContent(content));
     } catch (err) {
       sendToWatch({ Error: 'Bad OpenRouter response: ' + err.message });
     }
@@ -202,9 +242,96 @@ function callOpenRouter(prompt) {
 
   request.send(JSON.stringify({
     model: model,
-    messages: buildMessages(prompt),
+    messages: messages,
     temperature: 0.2
   }));
+}
+
+function braveSearch(query, callback) {
+  var apiKey = getSetting('BraveSearchApiKey', '');
+  if (!getBoolSetting('EnableSearch', false) || !apiKey) {
+    callback('Search unavailable: Brave Search is disabled or missing an API key.');
+    return;
+  }
+
+  sendToWatch({ Status: 'Searching...' });
+  var request = new XMLHttpRequest();
+  request.open('GET', BRAVE_SEARCH_URL + '?count=' + MAX_SEARCH_RESULTS + '&q=' + encodeURIComponent(query), true);
+  request.setRequestHeader('Accept', 'application/json');
+  request.setRequestHeader('X-Subscription-Token', apiKey);
+  request.timeout = 30000;
+
+  request.onload = function() {
+    if (request.status < 200 || request.status >= 300) {
+      callback('Search failed with HTTP ' + request.status + '.');
+      return;
+    }
+
+    try {
+      var json = JSON.parse(request.responseText);
+      var results = json.web && json.web.results ? json.web.results : [];
+      var lines = ['Web search results for: ' + query];
+      for (var i = 0; i < results.length && i < MAX_SEARCH_RESULTS; i++) {
+        lines.push((i + 1) + '. ' + (results[i].title || 'Untitled'));
+        lines.push('URL: ' + (results[i].url || ''));
+        lines.push('Snippet: ' + (results[i].description || ''));
+      }
+      if (results.length === 0) {
+        lines.push('No results found.');
+      }
+      callback(lines.join('\n'));
+    } catch (err) {
+      callback('Search response could not be parsed: ' + err.message + '.');
+    }
+  };
+
+  request.onerror = function() {
+    callback('Search network error.');
+  };
+
+  request.ontimeout = function() {
+    callback('Search timed out.');
+  };
+
+  request.send();
+}
+
+function finishAssistantTurn(prompt, parsed) {
+  var reply = parsed.reply || 'No response.';
+  history.push({ role: 'user', content: prompt });
+  history.push({ role: 'assistant', content: reply });
+  if (history.length > 12) {
+    history = history.slice(history.length - 12);
+  }
+
+  sendAssistantReply(reply);
+
+  if (parsed.timeline) {
+    addTimelinePin(parsed.timeline);
+  }
+}
+
+function callOpenRouter(prompt) {
+  sendToWatch({ Status: 'Thinking...' });
+  getLocationContext(function(locationContext) {
+    var searchAvailable = getBoolSetting('EnableSearch', false) && !!getSetting('BraveSearchApiKey', '');
+    var contextText = locationContext + '\nSearch available: ' + (searchAvailable ? 'yes, request search with the search field when needed.' : 'no.') ;
+    var firstMessages = buildMessages(prompt, contextText, null);
+
+    callModel(firstMessages, function(parsed) {
+      if (parsed.search && searchAvailable) {
+        braveSearch(String(parsed.search), function(searchResultsText) {
+          sendToWatch({ Status: 'Thinking...' });
+          var secondMessages = buildMessages(prompt, contextText, searchResultsText);
+          callModel(secondMessages, function(finalParsed) {
+            finishAssistantTurn(prompt, finalParsed);
+          });
+        });
+      } else {
+        finishAssistantTurn(prompt, parsed);
+      }
+    });
+  });
 }
 
 function normalizeTimeline(timeline) {
