@@ -324,7 +324,7 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
 
   if (tts_start_tuple) {
     (void)speaker_stop();
-    s_tts_playing = speaker_stream_open(SpeakerPcmFormat_16kHz_16bit, 80);
+    s_tts_playing = speaker_stream_open(SpeakerPcmFormat_16kHz_16bit, 55);
     if (!s_tts_playing) {
       status = "Speaker failed";
       vibes_double_pulse();

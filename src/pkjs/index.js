@@ -14,7 +14,7 @@ var MAX_NOTES = 30;
 var MAX_NOTE_CHARS = 240;
 var DEFAULT_TTS_MODEL = 'hexgrad/kokoro-82m';
 var DEFAULT_TTS_VOICE = 'af_alloy';
-var TTS_CHUNK_BYTES = 512;
+var TTS_CHUNK_BYTES = 256;
 
 var history = [];
 var latestAssistantReply = '';
@@ -86,11 +86,28 @@ function downsample24k16To16k16(arrayBuffer) {
   var outputSampleCount = Math.floor(sampleCount * 2 / 3);
   var output = [];
 
+  function readSample(index) {
+    var byteIndex = index * 2;
+    var value = input[byteIndex] | (input[byteIndex + 1] << 8);
+    return value >= 0x8000 ? value - 0x10000 : value;
+  }
+
+  function writeSample(sample) {
+    sample = Math.max(-32768, Math.min(32767, Math.round(sample)));
+    if (sample < 0) {
+      sample += 0x10000;
+    }
+    output.push(sample & 0xff);
+    output.push((sample >> 8) & 0xff);
+  }
+
   for (var outSample = 0; outSample < outputSampleCount; outSample++) {
-    var inSample = Math.floor(outSample * 3 / 2);
-    var byteIndex = inSample * 2;
-    output.push(input[byteIndex]);
-    output.push(input[byteIndex + 1]);
+    var sourcePos = outSample * 3 / 2;
+    var sourceIndex = Math.floor(sourcePos);
+    var fraction = sourcePos - sourceIndex;
+    var a = readSample(sourceIndex);
+    var b = readSample(Math.min(sourceIndex + 1, sampleCount - 1));
+    writeSample(a + ((b - a) * fraction));
   }
 
   return output;
