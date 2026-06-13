@@ -32,8 +32,16 @@ static char s_assistant_response[RESPONSE_BUFFER_SIZE];
 static char s_chat_history[CHAT_HISTORY_BUFFER_SIZE];
 static char s_status_text[64];
 static bool s_start_dictation_on_appear;
+#ifdef _PBL_API_EXISTS_touch_service_subscribe
+static AppTimer *s_touch_long_timer;
+static bool s_touch_long_fired;
+static bool s_touch_moved;
+static int16_t s_touch_start_y;
+static int16_t s_touch_last_y;
+#endif
 
 static void update_display(const char *status);
+static void clear_watch_session(void);
 
 static void send_simple_command(uint32_t key, const char *failure_status) {
   DictionaryIterator *iter;
@@ -364,6 +372,77 @@ static void down_long_click_handler(ClickRecognizerRef recognizer, void *context
   send_simple_command(MESSAGE_KEY_ToggleMemory, "Toggle failed");
 }
 
+#ifdef _PBL_API_EXISTS_touch_service_subscribe
+static void touch_long_timer_callback(void *context) {
+  s_touch_long_timer = NULL;
+  if (!s_touch_moved) {
+    s_touch_long_fired = true;
+    clear_watch_session();
+    send_simple_command(MESSAGE_KEY_ClearSession, "Cleared watch only");
+  }
+}
+
+static void scroll_by_delta(int16_t delta_y) {
+  GSize content_size = scroll_layer_get_content_size(s_scroll_layer);
+  GRect bounds = layer_get_bounds(scroll_layer_get_layer(s_scroll_layer));
+  GPoint offset = scroll_layer_get_content_offset(s_scroll_layer);
+  int16_t min_y = bounds.size.h - content_size.h;
+
+  if (min_y > 0) {
+    min_y = 0;
+  }
+
+  offset.y += delta_y;
+  if (offset.y > 0) {
+    offset.y = 0;
+  } else if (offset.y < min_y) {
+    offset.y = min_y;
+  }
+
+  scroll_layer_set_content_offset(s_scroll_layer, offset, false);
+}
+
+static void touch_handler(const TouchEvent *event, void *context) {
+  switch (event->type) {
+    case TouchEvent_Touchdown:
+      s_touch_start_y = event->y;
+      s_touch_last_y = event->y;
+      s_touch_moved = false;
+      s_touch_long_fired = false;
+      if (s_touch_long_timer) {
+        app_timer_cancel(s_touch_long_timer);
+      }
+      s_touch_long_timer = app_timer_register(700, touch_long_timer_callback, NULL);
+      break;
+
+    case TouchEvent_PositionUpdate: {
+      int16_t delta_from_start = event->y - s_touch_start_y;
+      int16_t delta = event->y - s_touch_last_y;
+      if (delta_from_start > 8 || delta_from_start < -8) {
+        s_touch_moved = true;
+        if (s_touch_long_timer) {
+          app_timer_cancel(s_touch_long_timer);
+          s_touch_long_timer = NULL;
+        }
+      }
+      scroll_by_delta(delta);
+      s_touch_last_y = event->y;
+      break;
+    }
+
+    case TouchEvent_Liftoff:
+      if (s_touch_long_timer) {
+        app_timer_cancel(s_touch_long_timer);
+        s_touch_long_timer = NULL;
+      }
+      if (!s_touch_moved && !s_touch_long_fired) {
+        dictation_session_start(s_dictation_session);
+      }
+      break;
+  }
+}
+#endif
+
 // The ScrollLayer installs UP/DOWN scrolling, then calls this so SELECT can be added.
 static void scroll_click_config_provider(void *context) {
   // Bind the SELECT button to our custom handler.
@@ -459,10 +538,24 @@ static void window_load(Window *window) {
 
 //AI: Quick launch should behave like Bobby: open the app and immediately start listening.
 static void window_appear(Window *window) {
+#ifdef _PBL_API_EXISTS_touch_service_subscribe
+  touch_service_subscribe(touch_handler, NULL);
+#endif
+
   if (s_start_dictation_on_appear) {
     s_start_dictation_on_appear = false;
     dictation_session_start(s_dictation_session);
   }
+}
+
+static void window_disappear(Window *window) {
+#ifdef _PBL_API_EXISTS_touch_service_subscribe
+  if (s_touch_long_timer) {
+    app_timer_cancel(s_touch_long_timer);
+    s_touch_long_timer = NULL;
+  }
+  touch_service_unsubscribe();
+#endif
 }
 
 // Destroy UI objects created in window_load().
@@ -489,6 +582,7 @@ static void init(void) {
     //AI: Register which functions Pebble should call when this window loads and unloads.
     .load = window_load,
     .appear = window_appear,
+    .disappear = window_disappear,
     .unload = window_unload
   });
 
