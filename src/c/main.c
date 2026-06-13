@@ -297,7 +297,7 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
     status = "Error";
     vibes_double_pulse();
   } else if (chunk_done_tuple && chunk_done_tuple->value->int32 == 1) {
-    vibes_short_pulse();
+    vibes_double_pulse();
   }
 
   //USR: Update text/display with new info
