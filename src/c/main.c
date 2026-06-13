@@ -32,8 +32,27 @@ static char s_assistant_response[RESPONSE_BUFFER_SIZE];
 static char s_chat_history[CHAT_HISTORY_BUFFER_SIZE];
 static char s_status_text[64];
 static bool s_start_dictation_on_appear;
+static bool s_tts_playing;
 
 static void update_display(const char *status);
+
+static void send_simple_command(uint32_t key, const char *failure_status) {
+  DictionaryIterator *iter;
+  AppMessageResult result = app_message_outbox_begin(&iter);
+  if (result != APP_MSG_OK || !iter) {
+    update_display(failure_status);
+    vibes_double_pulse();
+    return;
+  }
+
+  dict_write_uint8(iter, key, 1);
+  dict_write_end(iter);
+  result = app_message_outbox_send();
+  if (result != APP_MSG_OK) {
+    update_display(failure_status);
+    vibes_double_pulse();
+  }
+}
 
 static void clear_watch_session(void) {
   s_last_prompt[0] = '\0';
@@ -256,6 +275,9 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   Tuple *response_tuple = dict_find(iter, MESSAGE_KEY_AssistantResponse);
   Tuple *chunk_index_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkIndex);
   Tuple *chunk_done_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkDone);
+  Tuple *tts_start_tuple = dict_find(iter, MESSAGE_KEY_TtsStart);
+  Tuple *tts_chunk_tuple = dict_find(iter, MESSAGE_KEY_TtsChunk);
+  Tuple *tts_end_tuple = dict_find(iter, MESSAGE_KEY_TtsEnd);
   Tuple *error_tuple = dict_find(iter, MESSAGE_KEY_Error);
 
   //USR: Default status to Ready. if status_tuple- is set, then use that for status (as a string?)
@@ -300,6 +322,28 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
     vibes_double_pulse();
   }
 
+  if (tts_start_tuple) {
+    (void)speaker_stop();
+    s_tts_playing = speaker_stream_open(SpeakerPcmFormat_16kHz_16bit, 80);
+    if (!s_tts_playing) {
+      status = "Speaker failed";
+      vibes_double_pulse();
+    } else {
+      status = "Speaking...";
+    }
+  }
+
+  if (tts_chunk_tuple && s_tts_playing) {
+    (void)speaker_stream_write(tts_chunk_tuple->value->data, tts_chunk_tuple->length);
+    status = "Speaking...";
+  }
+
+  if (tts_end_tuple && s_tts_playing) {
+    (void)speaker_stream_close();
+    s_tts_playing = false;
+    status = "Done";
+  }
+
   //USR: Update text/display with new info
   //AI: Rebuild and redraw the watch text view using the latest status and response.
   update_display(status);
@@ -328,39 +372,26 @@ static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
 static void select_long_click_handler(ClickRecognizerRef recognizer, void *context) {
   clear_watch_session();
 
-  DictionaryIterator *iter;
-  AppMessageResult result = app_message_outbox_begin(&iter);
-  if (result != APP_MSG_OK || !iter) {
-    update_display("Cleared watch only");
-    return;
-  }
-
-  dict_write_uint8(iter, MESSAGE_KEY_ClearSession, 1);
-  dict_write_end(iter);
-  result = app_message_outbox_send();
-  if (result != APP_MSG_OK) {
-    update_display("Cleared watch only");
-  }
+  send_simple_command(MESSAGE_KEY_ClearSession, "Cleared watch only");
 }
 
 static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_tts_playing) {
+    (void)speaker_stop();
+    s_tts_playing = false;
+  }
   update_display("Cancelling...");
+  send_simple_command(MESSAGE_KEY_CancelRequest, "Cancel failed");
+}
 
-  DictionaryIterator *iter;
-  AppMessageResult result = app_message_outbox_begin(&iter);
-  if (result != APP_MSG_OK || !iter) {
-    update_display("Cancel failed");
-    vibes_double_pulse();
+static void tts_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_assistant_response[0] == '\0') {
+    update_display("Nothing to read");
     return;
   }
 
-  dict_write_uint8(iter, MESSAGE_KEY_CancelRequest, 1);
-  dict_write_end(iter);
-  result = app_message_outbox_send();
-  if (result != APP_MSG_OK) {
-    update_display("Cancel failed");
-    vibes_double_pulse();
-  }
+  update_display("Preparing speech...");
+  send_simple_command(MESSAGE_KEY_TtsRequest, "TTS failed");
 }
 
 // The ScrollLayer installs UP/DOWN scrolling, then calls this so SELECT can be added.
@@ -369,6 +400,8 @@ static void scroll_click_config_provider(void *context) {
   window_single_click_subscribe(BUTTON_ID_BACK, back_click_handler);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
   window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click_handler, NULL);
+  window_long_click_subscribe(BUTTON_ID_UP, 700, tts_click_handler, NULL);
+  window_long_click_subscribe(BUTTON_ID_DOWN, 700, tts_click_handler, NULL);
 }
 
 // Create the plain scrollable text UI.

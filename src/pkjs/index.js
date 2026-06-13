@@ -4,6 +4,7 @@ var clayConfig = require('./config');
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
 var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+var OPENROUTER_TTS_URL = 'https://openrouter.ai/api/v1/audio/speech';
 var BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 var TIMELINE_URL = 'https://timeline-api.getpebble.com/v1/user/pins/';
 var DEFAULT_MODEL = 'moonshotai/kimi-k2.5';
@@ -11,8 +12,12 @@ var RESPONSE_CHUNK_CHARS = 700;
 var MAX_SEARCH_RESULTS = 3;
 var MAX_NOTES = 30;
 var MAX_NOTE_CHARS = 240;
+var TTS_MODEL = 'openai/gpt-4o-mini-tts-2025-12-15';
+var TTS_VOICE = 'alloy';
+var TTS_CHUNK_BYTES = 512;
 
 var history = [];
+var latestAssistantReply = '';
 var sendQueue = [];
 var sending = false;
 var activeRequests = [];
@@ -60,6 +65,100 @@ function showError(userMessage, detail) {
     console.log(userMessage + ': ' + detail);
   }
   sendToWatch({ Error: userMessage });
+}
+
+function sendTtsAudio(pcmBytes) {
+  sendToWatch({ TtsStart: 1, Status: 'Speaking...' });
+  for (var offset = 0; offset < pcmBytes.length; offset += TTS_CHUNK_BYTES) {
+    var end = Math.min(offset + TTS_CHUNK_BYTES, pcmBytes.length);
+    var chunk = [];
+    for (var i = offset; i < end; i++) {
+      chunk.push(pcmBytes[i]);
+    }
+    sendToWatch({ TtsChunk: chunk, Status: 'Speaking...' });
+  }
+  sendToWatch({ TtsEnd: 1, Status: 'Done' });
+}
+
+function downsample24k16To16k16(arrayBuffer) {
+  var input = new Uint8Array(arrayBuffer);
+  var sampleCount = Math.floor(input.length / 2);
+  var outputSampleCount = Math.floor(sampleCount * 2 / 3);
+  var output = [];
+
+  for (var outSample = 0; outSample < outputSampleCount; outSample++) {
+    var inSample = Math.floor(outSample * 3 / 2);
+    var byteIndex = inSample * 2;
+    output.push(input[byteIndex]);
+    output.push(input[byteIndex + 1]);
+  }
+
+  return output;
+}
+
+function requestTts() {
+  var apiKey = getSetting('OpenRouterApiKey', '');
+  var text = clip(latestAssistantReply || '', 1200);
+
+  if (!text) {
+    showError('Nothing to read yet.', 'No latest assistant reply for TTS');
+    return;
+  }
+  if (!apiKey) {
+    showError('Open settings and add OpenRouter key.', 'Missing OpenRouter API key for TTS');
+    return;
+  }
+
+  sendToWatch({ Status: 'Generating speech...' });
+  var request = new XMLHttpRequest();
+  requestGeneration++;
+  var generation = requestGeneration;
+  trackRequest(request, generation);
+  request.open('POST', OPENROUTER_TTS_URL, true);
+  request.responseType = 'arraybuffer';
+  request.setRequestHeader('Content-Type', 'application/json');
+  request.setRequestHeader('Authorization', 'Bearer ' + apiKey);
+  request.setRequestHeader('HTTP-Referer', 'https://repebble.com/');
+  request.setRequestHeader('X-Title', 'Pebble AI Chat');
+  request.timeout = 60000;
+
+  request.onload = function() {
+    untrackRequest(request);
+    if (!requestIsCurrent(request)) {
+      return;
+    }
+    if (request.status < 200 || request.status >= 300) {
+      showError('TTS failed (' + request.status + ').', 'OpenRouter TTS failed');
+      return;
+    }
+
+    try {
+      sendTtsAudio(downsample24k16To16k16(request.response));
+    } catch (err) {
+      showError('Bad TTS audio.', err.message);
+    }
+  };
+
+  request.onerror = function() {
+    untrackRequest(request);
+    if (requestIsCurrent(request)) {
+      showError('TTS network error.', 'Network error contacting OpenRouter TTS');
+    }
+  };
+
+  request.ontimeout = function() {
+    untrackRequest(request);
+    if (requestIsCurrent(request)) {
+      showError('TTS timed out.', 'OpenRouter TTS request timed out');
+    }
+  };
+
+  request.send(JSON.stringify({
+    model: TTS_MODEL,
+    input: text,
+    voice: TTS_VOICE,
+    response_format: 'pcm'
+  }));
 }
 
 function pumpSendQueue() {
@@ -654,6 +753,7 @@ function braveSearch(query, generation, callback) {
 
 function finishAssistantTurn(prompt, parsed, alreadySent) {
   var reply = parsed.reply || 'No response.';
+  latestAssistantReply = reply;
   history.push({ role: 'user', content: prompt });
   history.push({ role: 'assistant', content: reply });
   if (history.length > 12) {
@@ -808,6 +908,11 @@ Pebble.addEventListener('ready', function() {
 });
 
 Pebble.addEventListener('appmessage', function(e) {
+  if (e.payload && e.payload.TtsRequest) {
+    requestTts();
+    return;
+  }
+
   if (e.payload && e.payload.CancelRequest) {
     cancelActiveRequests();
     return;
