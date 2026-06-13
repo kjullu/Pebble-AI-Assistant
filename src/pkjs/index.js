@@ -184,21 +184,13 @@ function buildStatsText() {
   var stats = getMonthlyStats();
   var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
   return [
-    'AI Chat',
-    '',
-    stats.month,
     'Credits: ' + formatCredits(stats.usageCredits),
     'Messages: ' + Number(stats.messages || 0),
     'Searches: ' + Number(stats.searches || 0),
-    '',
-    'Loc ' + (getBoolSetting('EnableLocation', false) ? 'on' : 'off') +
-      ' Mem ' + (getBoolSetting('EnableMemory', true) ? 'on' : 'off') +
-      ' Web ' + (getBoolSetting('EnableSearch', false) ? 'on' : 'off'),
-    '',
-    'Model:',
-    model,
-    '',
-    'SELECT: speak'
+    'Location: ' + (getBoolSetting('EnableLocation', false) ? 'on' : 'off'),
+    'Memory: ' + (getBoolSetting('EnableMemory', true) ? 'on' : 'off'),
+    'Search: ' + (getBoolSetting('EnableSearch', false) ? 'on' : 'off'),
+    model
   ].join('\n');
 }
 

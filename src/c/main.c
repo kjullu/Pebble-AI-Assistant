@@ -99,10 +99,10 @@ static void configure_message_layer(TextLayer *layer) {
 //AI: Draw the idle home screen with usage/model/tool stats from the phone.
 static void home_layer_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  const char *stats = s_stats_text[0] ? s_stats_text : "AI Chat\n\nStats loading...\n\nSELECT: speak";
+  const char *stats = s_stats_text[0] ? s_stats_text : "Stats loading...";
 
   graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, stats, fonts_get_system_font(FONT_KEY_GOTHIC_24),
+  graphics_draw_text(ctx, stats, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(PADDING, PADDING, bounds.size.w - (PADDING * 2), bounds.size.h - PADDING),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 }
@@ -214,8 +214,8 @@ static void layout_chat(bool scroll_to_bottom) {
     content_height = y + PADDING;
   } else {
     int16_t text_width = width - (PADDING * 2);
-    GSize stats_size = graphics_text_layout_get_content_size(s_stats_text[0] ? s_stats_text : "AI Chat\n\nStats loading...\n\nSELECT: speak",
-                                                             fonts_get_system_font(FONT_KEY_GOTHIC_24),
+    GSize stats_size = graphics_text_layout_get_content_size(s_stats_text[0] ? s_stats_text : "Stats loading...",
+                                                             fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                                                              GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT),
                                                              GTextOverflowModeWordWrap, GTextAlignmentLeft);
     int16_t stats_height = stats_size.h + (PADDING * 2);
