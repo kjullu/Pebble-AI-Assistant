@@ -206,6 +206,7 @@ function sendStatsToWatch() {
 function refreshRemainingCredits() {
   var apiKey = getSetting('OpenRouterApiKey', '');
   if (!apiKey) {
+    sendStatsToWatch();
     return;
   }
 
@@ -217,6 +218,7 @@ function refreshRemainingCredits() {
   request.onload = function() {
     if (request.status < 200 || request.status >= 300) {
       console.log('Credits unavailable: HTTP ' + request.status + ' ' + request.responseText);
+      sendStatsToWatch();
       return;
     }
 
@@ -237,10 +239,12 @@ function refreshRemainingCredits() {
 
   request.onerror = function() {
     console.log('Credits network error');
+    sendStatsToWatch();
   };
 
   request.ontimeout = function() {
     console.log('Credits request timed out');
+    sendStatsToWatch();
   };
 
   request.send();
@@ -699,6 +703,14 @@ function callModelStream(messages, generation, callback) {
 
     var parsed = parseAssistantContent(fullContent);
     var finalReply = parsed.reply || extractReplyFromPartialJson(fullContent) || 'No response.';
+    if (!fullContent || finalReply === 'No response.') {
+      console.log('Streaming returned no usable content; retrying without stream.');
+      callModel(messages, generation, function(retryParsed) {
+        callback(retryParsed, false);
+      });
+      return;
+    }
+
     if (!sentAnyChunk) {
       sendAssistantDelta(finalReply, 0, true);
       sentAnyChunk = true;
@@ -966,6 +978,12 @@ Pebble.addEventListener('ready', function() {
 });
 
 Pebble.addEventListener('appmessage', function(e) {
+  if (e.payload && e.payload.RefreshStats) {
+    sendStatsToWatch();
+    refreshRemainingCredits();
+    return;
+  }
+
   if (e.payload && e.payload.ToggleLocation) {
     var locationEnabled = toggleBoolSetting('EnableLocation', false);
     sendToWatch({ Status: locationEnabled ? 'Location on' : 'Location off' });

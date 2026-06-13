@@ -46,6 +46,23 @@ static int16_t s_touch_last_y;
 
 static void update_display(const char *status);
 static void clear_watch_session(void);
+static void send_simple_command(uint32_t key, const char *failure_status);
+
+static void request_stats_refresh(void) {
+  send_simple_command(MESSAGE_KEY_RefreshStats, "Stats unavailable");
+}
+
+static void request_stats_refresh_timer(void *context) {
+  request_stats_refresh();
+}
+
+static void request_stats_refresh_soon(void) {
+  s_stats_text[0] = '\0';
+  layer_mark_dirty(s_home_layer);
+  request_stats_refresh();
+  app_timer_register(1000, request_stats_refresh_timer, NULL);
+  app_timer_register(3000, request_stats_refresh_timer, NULL);
+}
 
 static void send_simple_command(uint32_t key, const char *failure_status) {
   DictionaryIterator *iter;
@@ -103,7 +120,7 @@ static void configure_message_layer(TextLayer *layer) {
 //AI: Draw the idle home screen with usage/model/tool stats from the phone.
 static void home_layer_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  const char *stats = s_stats_text[0] ? s_stats_text : "Stats loading...";
+  const char *stats = s_stats_text[0] ? s_stats_text : "...";
 
   graphics_context_set_text_color(ctx, GColorBlack);
   graphics_draw_text(ctx, stats, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
@@ -218,7 +235,7 @@ static void layout_chat(bool scroll_to_bottom) {
     content_height = y + PADDING;
   } else {
     int16_t text_width = width - (PADDING * 2);
-    GSize stats_size = graphics_text_layout_get_content_size(s_stats_text[0] ? s_stats_text : "Stats loading...",
+    GSize stats_size = graphics_text_layout_get_content_size(s_stats_text[0] ? s_stats_text : "...",
                                                              fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                                                              GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT),
                                                              GTextOverflowModeWordWrap, GTextAlignmentLeft);
@@ -375,6 +392,7 @@ static void dictation_callback(DictationSession *session, DictationSessionStatus
     send_prompt(transcription);
   } else {
     s_show_home = true;
+    request_stats_refresh_soon();
     update_display("Ready");
   }
 }
@@ -401,6 +419,7 @@ static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
 
   if (!s_show_home) {
     s_show_home = true;
+    request_stats_refresh_soon();
     update_display("Ready");
     return;
   }
@@ -584,6 +603,8 @@ static void window_appear(Window *window) {
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
   touch_service_subscribe(touch_handler, NULL);
 #endif
+
+  request_stats_refresh_soon();
 
   if (s_start_dictation_on_appear) {
     s_start_dictation_on_appear = false;
