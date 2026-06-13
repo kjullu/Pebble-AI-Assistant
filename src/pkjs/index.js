@@ -633,6 +633,12 @@ Pebble.addEventListener('ready', function() {
 });
 
 Pebble.addEventListener('appmessage', function(e) {
+  if (e.payload && e.payload.ClearSession) {
+    history = [];
+    sendToWatch({ Status: 'New session' });
+    return;
+  }
+
   var prompt = e.payload && e.payload.Prompt;
   if (prompt) {
     callOpenRouter(prompt);

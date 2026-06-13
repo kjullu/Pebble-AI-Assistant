@@ -33,6 +33,15 @@ static char s_chat_history[CHAT_HISTORY_BUFFER_SIZE];
 static char s_status_text[64];
 static bool s_start_dictation_on_appear;
 
+static void update_display(const char *status);
+
+static void clear_watch_session(void) {
+  s_last_prompt[0] = '\0';
+  s_assistant_response[0] = '\0';
+  s_chat_history[0] = '\0';
+  update_display("New session");
+}
+
 //AI: Append text to the session transcript without overflowing the fixed buffer.
 static void append_chat_history(const char *text) {
   size_t current_len = strlen(s_chat_history);
@@ -308,10 +317,29 @@ static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
   dictation_session_start(s_dictation_session);
 }
 
+static void select_long_click_handler(ClickRecognizerRef recognizer, void *context) {
+  clear_watch_session();
+
+  DictionaryIterator *iter;
+  AppMessageResult result = app_message_outbox_begin(&iter);
+  if (result != APP_MSG_OK || !iter) {
+    update_display("Cleared watch only");
+    return;
+  }
+
+  dict_write_uint8(iter, MESSAGE_KEY_ClearSession, 1);
+  dict_write_end(iter);
+  result = app_message_outbox_send();
+  if (result != APP_MSG_OK) {
+    update_display("Cleared watch only");
+  }
+}
+
 // The ScrollLayer installs UP/DOWN scrolling, then calls this so SELECT can be added.
 static void scroll_click_config_provider(void *context) {
   // Bind the SELECT button to our custom handler.
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click_handler, NULL);
 }
 
 // Create the plain scrollable text UI.

@@ -28,6 +28,7 @@
     },
     "messageKeys": [
       "Prompt",
+      "ClearSession",
       "AssistantResponse",
       "ResponseChunkIndex",
       "ResponseChunkDone",
