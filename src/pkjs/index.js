@@ -92,6 +92,27 @@ function saveNotes(notes) {
   localStorage.setItem('NotesMemory', JSON.stringify(notes.slice(Math.max(0, notes.length - MAX_NOTES))));
 }
 
+function notesToText() {
+  var notes = getNotes();
+  var lines = [];
+  for (var i = 0; i < notes.length; i++) {
+    lines.push(notes[i].text || '');
+  }
+  return lines.join('\n');
+}
+
+function saveNotesFromText(text) {
+  var rawLines = String(text || '').split('\n');
+  var notes = [];
+  for (var i = 0; i < rawLines.length; i++) {
+    var note = clip(rawLines[i], MAX_NOTE_CHARS).replace(/^\s+|\s+$/g, '');
+    if (note) {
+      notes.push({ text: note, createdAt: new Date().toISOString() });
+    }
+  }
+  saveNotes(notes);
+}
+
 function addNotes(notesToAdd) {
   if (!notesToAdd) {
     return;
@@ -144,6 +165,7 @@ function saveSettings(convertedSettings, rawSettings) {
   var enableSearch = settingValue(convertedSettings, rawSettings, 'EnableSearch', messageKeys.EnableSearch);
   var braveApiKey = settingValue(convertedSettings, rawSettings, 'BraveSearchApiKey', messageKeys.BraveSearchApiKey);
   var extraSystemPrompt = settingValue(convertedSettings, rawSettings, 'ExtraSystemPrompt', messageKeys.ExtraSystemPrompt);
+  var notesMemoryText = settingValue(convertedSettings, rawSettings, 'NotesMemoryText', messageKeys.NotesMemoryText);
 
   if (apiKey !== undefined) {
     localStorage.setItem('OpenRouterApiKey', String(apiKey).trim());
@@ -162,6 +184,9 @@ function saveSettings(convertedSettings, rawSettings) {
   }
   if (extraSystemPrompt !== undefined) {
     localStorage.setItem('ExtraSystemPrompt', String(extraSystemPrompt).trim());
+  }
+  if (notesMemoryText !== undefined) {
+    saveNotesFromText(notesMemoryText);
   }
 }
 
@@ -705,6 +730,15 @@ Pebble.addEventListener('appmessage', function(e) {
 });
 
 Pebble.addEventListener('showConfiguration', function() {
+  clay.setSettings({
+    NotesMemoryText: notesToText(),
+    ExtraSystemPrompt: getSetting('ExtraSystemPrompt', ''),
+    OpenRouterApiKey: getSetting('OpenRouterApiKey', ''),
+    OpenRouterModel: getSetting('OpenRouterModel', DEFAULT_MODEL),
+    EnableLocation: getBoolSetting('EnableLocation', false),
+    EnableSearch: getBoolSetting('EnableSearch', false),
+    BraveSearchApiKey: getSetting('BraveSearchApiKey', '')
+  });
   Pebble.openURL(clay.generateUrl());
 });
 

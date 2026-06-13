@@ -55,6 +55,15 @@ module.exports = [
         "attributes": {
           "placeholder": "Example: Be terse and use Danish when I ask in Danish."
         }
+      },
+      {
+        "type": "input",
+        "messageKey": "NotesMemoryText",
+        "label": "Memory Notes",
+        "description": "One note per line. These are sent to the AI as memory.",
+        "attributes": {
+          "placeholder": "User prefers 24-hour time."
+        }
       }
     ]
   },

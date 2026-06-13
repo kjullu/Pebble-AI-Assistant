@@ -39,7 +39,8 @@
       "EnableLocation",
       "EnableSearch",
       "BraveSearchApiKey",
-      "ExtraSystemPrompt"
+      "ExtraSystemPrompt",
+      "NotesMemoryText"
     ],
     "resources": {
       "media": []
