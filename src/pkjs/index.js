@@ -9,6 +9,8 @@ var TIMELINE_URL = 'https://timeline-api.getpebble.com/v1/user/pins/';
 var DEFAULT_MODEL = 'openai/gpt-4o-mini';
 var RESPONSE_CHUNK_CHARS = 700;
 var MAX_SEARCH_RESULTS = 3;
+var MAX_NOTES = 30;
+var MAX_NOTE_CHARS = 240;
 
 var history = [];
 var sendQueue = [];
@@ -77,6 +79,51 @@ function getBoolSetting(key, fallback) {
   return value === true || value === 1 || value === '1' || value === 'true';
 }
 
+function getNotes() {
+  try {
+    var notes = JSON.parse(localStorage.getItem('NotesMemory') || '[]');
+    return notes && notes.length !== undefined ? notes : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveNotes(notes) {
+  localStorage.setItem('NotesMemory', JSON.stringify(notes.slice(Math.max(0, notes.length - MAX_NOTES))));
+}
+
+function addNotes(notesToAdd) {
+  if (!notesToAdd) {
+    return;
+  }
+
+  if (!(notesToAdd instanceof Array)) {
+    notesToAdd = [notesToAdd];
+  }
+
+  var notes = getNotes();
+  for (var i = 0; i < notesToAdd.length; i++) {
+    var text = clip(notesToAdd[i], MAX_NOTE_CHARS).replace(/^\s+|\s+$/g, '');
+    if (text) {
+      notes.push({ text: text, createdAt: new Date().toISOString() });
+    }
+  }
+  saveNotes(notes);
+}
+
+function buildNotesContext() {
+  var notes = getNotes();
+  if (notes.length === 0) {
+    return 'Persistent notes/memory: none yet.';
+  }
+
+  var lines = ['Persistent notes/memory available to you:'];
+  for (var i = 0; i < notes.length; i++) {
+    lines.push((i + 1) + '. ' + notes[i].text);
+  }
+  return lines.join('\n');
+}
+
 function settingValue(convertedSettings, rawSettings, name, numericKey) {
   if (rawSettings && rawSettings[name] !== undefined) {
     return rawSettings[name] && rawSettings[name].value !== undefined ? rawSettings[name].value : rawSettings[name];
@@ -118,7 +165,9 @@ function buildSystemPrompt() {
   return [
     'You are a concise assistant running on a Pebble watch.',
     'Always return only valid JSON with this shape:',
-    '{"reply":"short user-visible answer","timeline":null,"search":null}',
+    '{"reply":"short user-visible answer","timeline":null,"search":null,"notes":null}',
+    'You have a notes/memory tool. When the user asks you to remember something, or tells you a durable preference/fact worth remembering, put one or more short note strings in notes.',
+    'Only add useful long-term notes. Do not add notes for temporary facts, ordinary questions, or things already present in memory.',
     'If you need current web information and search is available, return {"reply":"Searching...","timeline":null,"search":"short search query"}.',
     'Only request search once per user question. After search results are provided, answer from those results and set search to null.',
     'If the user asks you to add, schedule, remind, or put something on the timeline, set timeline to:',
@@ -138,6 +187,7 @@ function buildMessages(prompt, contextText, searchResultsText) {
   if (contextText) {
     messages.push({ role: 'system', content: contextText });
   }
+  messages.push({ role: 'system', content: buildNotesContext() });
   if (searchResultsText) {
     messages.push({ role: 'system', content: searchResultsText });
   }
@@ -163,13 +213,15 @@ function parseAssistantContent(content) {
     return {
       reply: String(parsed.reply || ''),
       timeline: parsed.timeline || null,
-      search: parsed.search || null
+      search: parsed.search || null,
+      notes: parsed.notes || null
     };
   } catch (err) {
     return {
       reply: String(content || ''),
       timeline: null,
-      search: null
+      search: null,
+      notes: null
     };
   }
 }
@@ -501,6 +553,10 @@ function finishAssistantTurn(prompt, parsed, alreadySent) {
 
   if (parsed.timeline) {
     addTimelinePin(parsed.timeline);
+  }
+
+  if (parsed.notes) {
+    addNotes(parsed.notes);
   }
 }
 
