@@ -5,11 +5,15 @@ module.exports = [
   },
   {
     "type": "text",
-    "defaultValue": "Enter your OpenRouter API key and model. The key is stored by the Pebble phone app for this watchapp."
+    "defaultValue": "Configure the AI provider, tools, memory, stats, and debug info."
   },
   {
     "type": "section",
     "items": [
+      {
+        "type": "heading",
+        "defaultValue": "OpenRouter"
+      },
       {
         "type": "input",
         "messageKey": "OpenRouterApiKey",
@@ -26,6 +30,15 @@ module.exports = [
         "attributes": {
           "placeholder": "moonshotai/kimi-k2.5"
         }
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Tools"
       },
       {
         "type": "toggle",
@@ -52,6 +65,15 @@ module.exports = [
         "attributes": {
           "placeholder": "Brave API key"
         }
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Prompt & Memory"
       },
       {
         "type": "input",
@@ -70,6 +92,15 @@ module.exports = [
         "attributes": {
           "placeholder": "User prefers 24-hour time."
         }
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Home Stats"
       },
       {
         "type": "input",
@@ -97,6 +128,15 @@ module.exports = [
         "attributes": {
           "placeholder": "0"
         }
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Debug"
       },
       {
         "type": "input",

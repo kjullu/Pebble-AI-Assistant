@@ -36,6 +36,7 @@ static char s_stats_text[STATS_BUFFER_SIZE];
 static bool s_start_dictation_on_appear;
 static bool s_show_home = true;
 static bool s_request_active;
+static bool s_response_started;
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
 static AppTimer *s_touch_long_timer;
 static bool s_touch_long_fired;
@@ -72,6 +73,7 @@ static void clear_watch_session(void) {
   s_chat_history[0] = '\0';
   s_show_home = true;
   s_request_active = false;
+  s_response_started = false;
   vibes_short_pulse();
   update_display("New session");
 }
@@ -269,6 +271,7 @@ static void send_prompt(const char *prompt) {
   s_assistant_response[0] = '\0';
   s_show_home = false;
   s_request_active = true;
+  s_response_started = false;
   if (s_chat_history[0] != '\0') {
     append_chat_history("\n\n");
   }
@@ -292,8 +295,6 @@ static void send_prompt(const char *prompt) {
   if (result != APP_MSG_OK) {
     update_display("Send failed");
     vibes_double_pulse();
-  } else {
-    vibes_short_pulse();
   }
 }
 
@@ -330,11 +331,19 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
       //AI: Add this chunk's text onto the full assistant response buffer.
       append_response_chunk(response_tuple->value->cstring);
       append_chat_history(response_tuple->value->cstring);
+      if (!s_response_started) {
+        s_response_started = true;
+        vibes_short_pulse();
+      }
     } else {
       //USR: Else do normal start screen with status
       //AI: No chunk index means this is a complete one-piece response, so replace the old text.
       snprintf(s_assistant_response, sizeof(s_assistant_response), "%s", response_tuple->value->cstring);
       append_chat_history(response_tuple->value->cstring);
+      if (!s_response_started) {
+        s_response_started = true;
+        vibes_short_pulse();
+      }
     }
   }
 
@@ -354,6 +363,9 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
 
   if (status_tuple && strcmp(status, "Cancelled") == 0) {
     s_request_active = false;
+  } else if (status_tuple && (strcmp(status, "Location on") == 0 || strcmp(status, "Location off") == 0 ||
+                              strcmp(status, "Memory on") == 0 || strcmp(status, "Memory off") == 0)) {
+    vibes_short_pulse();
   }
 
   if (stats_tuple) {
