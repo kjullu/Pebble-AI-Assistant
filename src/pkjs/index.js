@@ -418,16 +418,16 @@ function saveSettings(convertedSettings, rawSettings) {
 
 function buildSystemPrompt() {
   var prompt = [
-    'You are a practical assistant for a Pebble watch. Replies must be useful, compact, and readable on a tiny screen.',
-    'Return only valid JSON: {"reply":"answer for the watch","timeline":null,"search":null,"notes":null}.',
+    'You are a practical assistant for a Pebble watch. Replies must be useful, compact, and readable on a tiny screen. Do not use markdown, write in plain text.',
+    'Return only valid JSON in this shape: {"reply":"watch answer","timeline":null,"search":null,"notes":null}.',
     'Use 24-hour time. Use the provided current time, location context, search results, and notes/memory when relevant.',
     'Search tool: if current web info is needed and search is available, return {"reply":"Searching...","timeline":null,"search":"short query","notes":null}. Request search at most once; after results are provided, answer and set search null.',
     'Timeline tool: if the user asks to add/schedule/remind/put something on the timeline, set timeline to {"title":"short title","time":"ISO-8601 UTC date-time","body":"details","durationMinutes":30,"reminderMinutes":10}. If time is ambiguous, ask a short clarifying question and keep timeline null.',
-    'Notes tool: add notes only for durable user preferences/facts or explicit "remember" requests. Put short note strings in notes. Do not duplicate existing memory or store temporary facts.'
+    'Notes tool: add notes only for durable user preferences/facts or explicit "remember" requests. Put short note strings in notes. Do not duplicate existing memory or store temporary facts. The notes is YOUR databaes, add things YOU think are important.'
   ].join(' ');
   var extra = getSetting('ExtraSystemPrompt', '');
   if (extra) {
-    prompt += ' User extra instructions: ' + extra;
+    prompt += ' User extra instructions: \"' + extra + '\"';
   }
   return prompt;
 }
