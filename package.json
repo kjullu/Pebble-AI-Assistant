@@ -36,6 +36,7 @@
       "ResponseChunkIndex",
       "ResponseChunkDone",
       "Status",
+      "StatsText",
       "Error",
       "OpenRouterApiKey",
       "OpenRouterModel",

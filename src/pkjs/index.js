@@ -120,6 +120,92 @@ function getBoolSetting(key, fallback) {
   return value === true || value === 1 || value === '1' || value === 'true';
 }
 
+function statsMonthKey() {
+  var now = new Date();
+  return now.getUTCFullYear() + '-' + ('0' + (now.getUTCMonth() + 1)).slice(-2);
+}
+
+function defaultMonthlyStats() {
+  return {
+    month: statsMonthKey(),
+    messages: 0,
+    searches: 0,
+    usageCredits: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0
+  };
+}
+
+function getMonthlyStats() {
+  var currentMonth = statsMonthKey();
+  try {
+    var stats = JSON.parse(localStorage.getItem('MonthlyStats') || '{}');
+    if (stats.month === currentMonth) {
+      return stats;
+    }
+  } catch (err) {
+  }
+  return defaultMonthlyStats();
+}
+
+function saveMonthlyStats(stats) {
+  localStorage.setItem('MonthlyStats', JSON.stringify(stats));
+}
+
+function addUsageStats(usage) {
+  if (!usage) {
+    return;
+  }
+
+  var stats = getMonthlyStats();
+  stats.usageCredits += Number(usage.cost || 0);
+  stats.promptTokens += Number(usage.prompt_tokens || 0);
+  stats.completionTokens += Number(usage.completion_tokens || 0);
+  stats.totalTokens += Number(usage.total_tokens || 0);
+  saveMonthlyStats(stats);
+}
+
+function incrementStat(key) {
+  var stats = getMonthlyStats();
+  stats[key] = Number(stats[key] || 0) + 1;
+  saveMonthlyStats(stats);
+}
+
+function formatCredits(value) {
+  value = Number(value || 0);
+  if (value < 0.01) {
+    return value.toFixed(4);
+  }
+  return value.toFixed(2);
+}
+
+function buildStatsText() {
+  var stats = getMonthlyStats();
+  var model = getSetting('OpenRouterModel', DEFAULT_MODEL);
+  return [
+    'AI Chat',
+    '',
+    stats.month,
+    'Credits: ' + formatCredits(stats.usageCredits),
+    'Messages: ' + Number(stats.messages || 0),
+    'Searches: ' + Number(stats.searches || 0),
+    '',
+    'Loc ' + (getBoolSetting('EnableLocation', false) ? 'on' : 'off') +
+      ' Mem ' + (getBoolSetting('EnableMemory', true) ? 'on' : 'off') +
+      ' Web ' + (getBoolSetting('EnableSearch', false) ? 'on' : 'off'),
+    '',
+    'Model:',
+    model,
+    '',
+    'SELECT: speak'
+  ].join('\n');
+}
+
+function sendStatsToWatch() {
+  sendToWatch({ StatsText: buildStatsText() });
+}
+
 function setBoolSetting(key, value) {
   localStorage.setItem(key, value ? '1' : '0');
 }
@@ -439,6 +525,7 @@ function callModel(messages, generation, callback) {
 
     try {
       var json = JSON.parse(request.responseText);
+      addUsageStats(json.usage);
       var content = json.choices[0].message.content;
       callback(parseAssistantContent(content));
     } catch (err) {
@@ -500,6 +587,9 @@ function callModelStream(messages, generation, callback) {
 
     try {
       var json = JSON.parse(data);
+      if (json.usage) {
+        addUsageStats(json.usage);
+      }
       var delta = json.choices && json.choices[0] && json.choices[0].delta;
       var contentDelta = delta && delta.content ? delta.content : '';
       if (!contentDelta) {
@@ -616,6 +706,8 @@ function braveSearch(query, generation, callback) {
   }
 
   sendToWatch({ Status: 'Searching...' });
+  incrementStat('searches');
+  sendStatsToWatch();
   var request = new XMLHttpRequest();
   trackRequest(request, generation);
   request.open('GET', BRAVE_SEARCH_URL + '?count=' + MAX_SEARCH_RESULTS + '&q=' + encodeURIComponent(query), true);
@@ -691,11 +783,15 @@ function finishAssistantTurn(prompt, parsed, alreadySent) {
       addNotes(parsed.notes);
     }
   }
+
+  sendStatsToWatch();
 }
 
 function callOpenRouter(prompt) {
   requestGeneration++;
   var generation = requestGeneration;
+  incrementStat('messages');
+  sendStatsToWatch();
   sendToWatch({ Status: 'Thinking...' });
   getLocationContext(generation, function(locationContext) {
     var searchAvailable = getBoolSetting('EnableSearch', false) && !!getSetting('BraveSearchApiKey', '');
@@ -825,18 +921,21 @@ function addTimelinePin(timeline) {
 
 Pebble.addEventListener('ready', function() {
   console.log('PebbleKit JS ready');
+  sendStatsToWatch();
 });
 
 Pebble.addEventListener('appmessage', function(e) {
   if (e.payload && e.payload.ToggleLocation) {
     var locationEnabled = toggleBoolSetting('EnableLocation', false);
     sendToWatch({ Status: locationEnabled ? 'Location on' : 'Location off' });
+    sendStatsToWatch();
     return;
   }
 
   if (e.payload && e.payload.ToggleMemory) {
     var memoryEnabled = toggleBoolSetting('EnableMemory', true);
     sendToWatch({ Status: memoryEnabled ? 'Memory on' : 'Memory off' });
+    sendStatsToWatch();
     return;
   }
 
@@ -881,4 +980,5 @@ Pebble.addEventListener('webviewclosed', function(e) {
   var rawSettings = clay.getSettings(e.response, false);
   saveSettings(convertedSettings, rawSettings);
   sendToWatch({ Status: 'Settings saved' });
+  sendStatsToWatch();
 });

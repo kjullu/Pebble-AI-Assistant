@@ -10,6 +10,7 @@
 // Stores the accumulated assistant reply received from the phone.
 #define RESPONSE_BUFFER_SIZE 6144
 #define CHAT_HISTORY_BUFFER_SIZE 14000
+#define STATS_BUFFER_SIZE 512
 
 // Pointers to Pebble UI/session objects created at runtime.
 static Window *s_window;
@@ -31,6 +32,7 @@ static char s_last_prompt[DICTATION_BUFFER_SIZE];
 static char s_assistant_response[RESPONSE_BUFFER_SIZE];
 static char s_chat_history[CHAT_HISTORY_BUFFER_SIZE];
 static char s_status_text[64];
+static char s_stats_text[STATS_BUFFER_SIZE];
 static bool s_start_dictation_on_appear;
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
 static AppTimer *s_touch_long_timer;
@@ -94,14 +96,15 @@ static void configure_message_layer(TextLayer *layer) {
   text_layer_set_overflow_mode(layer, GTextOverflowModeWordWrap);
 }
 
-//AI: Draw the idle home screen: a centered black circle taking about 40% of the screen width.
+//AI: Draw the idle home screen with usage/model/tool stats from the phone.
 static void home_layer_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  int16_t diameter = bounds.size.w * 40 / 100;
-  GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
+  const char *stats = s_stats_text[0] ? s_stats_text : "AI Chat\n\nStats loading...\n\nSELECT: speak";
 
-  graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_circle(ctx, center, diameter / 2);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, stats, fonts_get_system_font(FONT_KEY_GOTHIC_24),
+                     GRect(PADDING, PADDING, bounds.size.w - (PADDING * 2), bounds.size.h - PADDING),
+                     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 }
 
 //AI: Return true for transcript speaker-name lines that should be drawn in bold.
@@ -206,7 +209,20 @@ static void layout_chat(bool scroll_to_bottom) {
     y += resize_text_layer(s_status_message_layer, y, width);
   }
 
-  int16_t content_height = has_history || show_status_message ? y + PADDING : bounds.size.h;
+  int16_t content_height;
+  if (has_history || show_status_message) {
+    content_height = y + PADDING;
+  } else {
+    int16_t text_width = width - (PADDING * 2);
+    GSize stats_size = graphics_text_layout_get_content_size(s_stats_text[0] ? s_stats_text : "AI Chat\n\nStats loading...\n\nSELECT: speak",
+                                                             fonts_get_system_font(FONT_KEY_GOTHIC_24),
+                                                             GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT),
+                                                             GTextOverflowModeWordWrap, GTextAlignmentLeft);
+    int16_t stats_height = stats_size.h + (PADDING * 2);
+    content_height = stats_height > bounds.size.h ? stats_height : bounds.size.h;
+    layer_set_frame(s_home_layer, GRect(0, 0, width, content_height));
+    layer_mark_dirty(s_home_layer);
+  }
   scroll_layer_set_content_size(s_scroll_layer, GSize(width, content_height));
 
   if (scroll_to_bottom && content_height > bounds.size.h) {
@@ -282,6 +298,7 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   Tuple *response_tuple = dict_find(iter, MESSAGE_KEY_AssistantResponse);
   Tuple *chunk_index_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkIndex);
   Tuple *chunk_done_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkDone);
+  Tuple *stats_tuple = dict_find(iter, MESSAGE_KEY_StatsText);
   Tuple *error_tuple = dict_find(iter, MESSAGE_KEY_Error);
 
   //USR: Default status to Ready. if status_tuple- is set, then use that for status (as a string?)
@@ -324,6 +341,11 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
     vibes_double_pulse();
   } else if (chunk_done_tuple && chunk_done_tuple->value->int32 == 1) {
     vibes_double_pulse();
+  }
+
+  if (stats_tuple) {
+    snprintf(s_stats_text, sizeof(s_stats_text), "%s", stats_tuple->value->cstring);
+    layer_mark_dirty(s_home_layer);
   }
 
   //USR: Update text/display with new info
