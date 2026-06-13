@@ -35,6 +35,12 @@ module.exports = [
       },
       {
         "type": "toggle",
+        "messageKey": "EnableMemory",
+        "label": "Enable Memory",
+        "defaultValue": true
+      },
+      {
+        "type": "toggle",
         "messageKey": "EnableSearch",
         "label": "Enable Brave Search",
         "defaultValue": false
@@ -45,24 +51,6 @@ module.exports = [
         "label": "Brave Search API Key",
         "attributes": {
           "placeholder": "Brave API key"
-        }
-      },
-      {
-        "type": "input",
-        "messageKey": "TtsModel",
-        "defaultValue": "hexgrad/kokoro-82m",
-        "label": "TTS Model",
-        "attributes": {
-          "placeholder": "hexgrad/kokoro-82m"
-        }
-      },
-      {
-        "type": "input",
-        "messageKey": "TtsVoice",
-        "defaultValue": "af_alloy",
-        "label": "TTS Voice",
-        "attributes": {
-          "placeholder": "af_alloy"
         }
       },
       {

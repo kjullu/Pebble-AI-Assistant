@@ -30,10 +30,8 @@
       "Prompt",
       "ClearSession",
       "CancelRequest",
-      "TtsRequest",
-      "TtsStart",
-      "TtsChunk",
-      "TtsEnd",
+      "ToggleLocation",
+      "ToggleMemory",
       "AssistantResponse",
       "ResponseChunkIndex",
       "ResponseChunkDone",
@@ -42,12 +40,11 @@
       "OpenRouterApiKey",
       "OpenRouterModel",
       "EnableLocation",
+      "EnableMemory",
       "EnableSearch",
       "BraveSearchApiKey",
       "ExtraSystemPrompt",
-      "NotesMemoryText",
-      "TtsModel",
-      "TtsVoice"
+      "NotesMemoryText"
     ],
     "resources": {
       "media": []

@@ -4,7 +4,6 @@ var clayConfig = require('./config');
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
 var OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-var OPENROUTER_TTS_URL = 'https://openrouter.ai/api/v1/audio/speech';
 var BRAVE_SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search';
 var TIMELINE_URL = 'https://timeline-api.getpebble.com/v1/user/pins/';
 var DEFAULT_MODEL = 'moonshotai/kimi-k2.5';
@@ -12,12 +11,8 @@ var RESPONSE_CHUNK_CHARS = 700;
 var MAX_SEARCH_RESULTS = 3;
 var MAX_NOTES = 30;
 var MAX_NOTE_CHARS = 240;
-var DEFAULT_TTS_MODEL = 'hexgrad/kokoro-82m';
-var DEFAULT_TTS_VOICE = 'af_alloy';
-var TTS_CHUNK_BYTES = 256;
 
 var history = [];
-var latestAssistantReply = '';
 var sendQueue = [];
 var sending = false;
 var activeRequests = [];
@@ -65,119 +60,6 @@ function showError(userMessage, detail) {
     console.log(userMessage + ': ' + detail);
   }
   sendToWatch({ Error: userMessage });
-}
-
-function sendTtsAudio(pcmBytes) {
-  sendToWatch({ TtsStart: 1, Status: 'Speaking...' });
-  for (var offset = 0; offset < pcmBytes.length; offset += TTS_CHUNK_BYTES) {
-    var end = Math.min(offset + TTS_CHUNK_BYTES, pcmBytes.length);
-    var chunk = [];
-    for (var i = offset; i < end; i++) {
-      chunk.push(pcmBytes[i]);
-    }
-    sendToWatch({ TtsChunk: chunk, Status: 'Speaking...' });
-  }
-  sendToWatch({ TtsEnd: 1, Status: 'Done' });
-}
-
-function downsample24k16To16k16(arrayBuffer) {
-  var input = new Uint8Array(arrayBuffer);
-  var sampleCount = Math.floor(input.length / 2);
-  var outputSampleCount = Math.floor(sampleCount * 2 / 3);
-  var output = [];
-
-  function readSample(index) {
-    var byteIndex = index * 2;
-    var value = input[byteIndex] | (input[byteIndex + 1] << 8);
-    return value >= 0x8000 ? value - 0x10000 : value;
-  }
-
-  function writeSample(sample) {
-    sample = Math.max(-32768, Math.min(32767, Math.round(sample)));
-    if (sample < 0) {
-      sample += 0x10000;
-    }
-    output.push(sample & 0xff);
-    output.push((sample >> 8) & 0xff);
-  }
-
-  for (var outSample = 0; outSample < outputSampleCount; outSample++) {
-    var sourcePos = outSample * 3 / 2;
-    var sourceIndex = Math.floor(sourcePos);
-    var fraction = sourcePos - sourceIndex;
-    var a = readSample(sourceIndex);
-    var b = readSample(Math.min(sourceIndex + 1, sampleCount - 1));
-    writeSample(a + ((b - a) * fraction));
-  }
-
-  return output;
-}
-
-function requestTts() {
-  var apiKey = getSetting('OpenRouterApiKey', '');
-  var ttsModel = getSetting('TtsModel', DEFAULT_TTS_MODEL);
-  var ttsVoice = getSetting('TtsVoice', DEFAULT_TTS_VOICE);
-  var text = clip(latestAssistantReply || '', 1200);
-
-  if (!text) {
-    showError('Nothing to read yet.', 'No latest assistant reply for TTS');
-    return;
-  }
-  if (!apiKey) {
-    showError('Open settings and add OpenRouter key.', 'Missing OpenRouter API key for TTS');
-    return;
-  }
-
-  sendToWatch({ Status: 'Generating speech...' });
-  var request = new XMLHttpRequest();
-  requestGeneration++;
-  var generation = requestGeneration;
-  trackRequest(request, generation);
-  request.open('POST', OPENROUTER_TTS_URL, true);
-  request.responseType = 'arraybuffer';
-  request.setRequestHeader('Content-Type', 'application/json');
-  request.setRequestHeader('Authorization', 'Bearer ' + apiKey);
-  request.setRequestHeader('HTTP-Referer', 'https://repebble.com/');
-  request.setRequestHeader('X-Title', 'Pebble AI Chat');
-  request.timeout = 60000;
-
-  request.onload = function() {
-    untrackRequest(request);
-    if (!requestIsCurrent(request)) {
-      return;
-    }
-    if (request.status < 200 || request.status >= 300) {
-      showError('TTS failed (' + request.status + ').', 'OpenRouter TTS failed using ' + ttsModel + ' voice ' + ttsVoice);
-      return;
-    }
-
-    try {
-      sendTtsAudio(downsample24k16To16k16(request.response));
-    } catch (err) {
-      showError('Bad TTS audio.', err.message);
-    }
-  };
-
-  request.onerror = function() {
-    untrackRequest(request);
-    if (requestIsCurrent(request)) {
-      showError('TTS network error.', 'Network error contacting OpenRouter TTS');
-    }
-  };
-
-  request.ontimeout = function() {
-    untrackRequest(request);
-    if (requestIsCurrent(request)) {
-      showError('TTS timed out.', 'OpenRouter TTS request timed out');
-    }
-  };
-
-  request.send(JSON.stringify({
-    model: ttsModel,
-    input: text,
-    voice: ttsVoice,
-    response_format: 'pcm'
-  }));
 }
 
 function pumpSendQueue() {
@@ -238,6 +120,16 @@ function getBoolSetting(key, fallback) {
   return value === true || value === 1 || value === '1' || value === 'true';
 }
 
+function setBoolSetting(key, value) {
+  localStorage.setItem(key, value ? '1' : '0');
+}
+
+function toggleBoolSetting(key, fallback) {
+  var value = !getBoolSetting(key, fallback);
+  setBoolSetting(key, value);
+  return value;
+}
+
 function getNotes() {
   try {
     var notes = JSON.parse(localStorage.getItem('NotesMemory') || '[]');
@@ -292,6 +184,10 @@ function addNotes(notesToAdd) {
 }
 
 function buildNotesContext() {
+  if (!getBoolSetting('EnableMemory', true)) {
+    return 'Persistent notes/memory disabled.';
+  }
+
   var notes = getNotes();
   if (notes.length === 0) {
     return 'Persistent notes/memory: none yet.';
@@ -321,12 +217,11 @@ function saveSettings(convertedSettings, rawSettings) {
   var apiKey = settingValue(convertedSettings, rawSettings, 'OpenRouterApiKey', messageKeys.OpenRouterApiKey);
   var model = settingValue(convertedSettings, rawSettings, 'OpenRouterModel', messageKeys.OpenRouterModel);
   var enableLocation = settingValue(convertedSettings, rawSettings, 'EnableLocation', messageKeys.EnableLocation);
+  var enableMemory = settingValue(convertedSettings, rawSettings, 'EnableMemory', messageKeys.EnableMemory);
   var enableSearch = settingValue(convertedSettings, rawSettings, 'EnableSearch', messageKeys.EnableSearch);
   var braveApiKey = settingValue(convertedSettings, rawSettings, 'BraveSearchApiKey', messageKeys.BraveSearchApiKey);
   var extraSystemPrompt = settingValue(convertedSettings, rawSettings, 'ExtraSystemPrompt', messageKeys.ExtraSystemPrompt);
   var notesMemoryText = settingValue(convertedSettings, rawSettings, 'NotesMemoryText', messageKeys.NotesMemoryText);
-  var ttsModel = settingValue(convertedSettings, rawSettings, 'TtsModel', messageKeys.TtsModel);
-  var ttsVoice = settingValue(convertedSettings, rawSettings, 'TtsVoice', messageKeys.TtsVoice);
 
   if (apiKey !== undefined) {
     localStorage.setItem('OpenRouterApiKey', String(apiKey).trim());
@@ -336,6 +231,9 @@ function saveSettings(convertedSettings, rawSettings) {
   }
   if (enableLocation !== undefined) {
     localStorage.setItem('EnableLocation', String(enableLocation ? 1 : 0));
+  }
+  if (enableMemory !== undefined) {
+    localStorage.setItem('EnableMemory', String(enableMemory ? 1 : 0));
   }
   if (enableSearch !== undefined) {
     localStorage.setItem('EnableSearch', String(enableSearch ? 1 : 0));
@@ -348,12 +246,6 @@ function saveSettings(convertedSettings, rawSettings) {
   }
   if (notesMemoryText !== undefined) {
     saveNotesFromText(notesMemoryText);
-  }
-  if (ttsModel !== undefined && String(ttsModel).trim() !== '') {
-    localStorage.setItem('TtsModel', String(ttsModel).trim());
-  }
-  if (ttsVoice !== undefined && String(ttsVoice).trim() !== '') {
-    localStorage.setItem('TtsVoice', String(ttsVoice).trim());
   }
 }
 
@@ -780,7 +672,6 @@ function braveSearch(query, generation, callback) {
 
 function finishAssistantTurn(prompt, parsed, alreadySent) {
   var reply = parsed.reply || 'No response.';
-  latestAssistantReply = reply;
   history.push({ role: 'user', content: prompt });
   history.push({ role: 'assistant', content: reply });
   if (history.length > 12) {
@@ -796,7 +687,9 @@ function finishAssistantTurn(prompt, parsed, alreadySent) {
   }
 
   if (parsed.notes) {
-    addNotes(parsed.notes);
+    if (getBoolSetting('EnableMemory', true)) {
+      addNotes(parsed.notes);
+    }
   }
 }
 
@@ -935,8 +828,15 @@ Pebble.addEventListener('ready', function() {
 });
 
 Pebble.addEventListener('appmessage', function(e) {
-  if (e.payload && e.payload.TtsRequest) {
-    requestTts();
+  if (e.payload && e.payload.ToggleLocation) {
+    var locationEnabled = toggleBoolSetting('EnableLocation', false);
+    sendToWatch({ Status: locationEnabled ? 'Location on' : 'Location off' });
+    return;
+  }
+
+  if (e.payload && e.payload.ToggleMemory) {
+    var memoryEnabled = toggleBoolSetting('EnableMemory', true);
+    sendToWatch({ Status: memoryEnabled ? 'Memory on' : 'Memory off' });
     return;
   }
 
@@ -965,10 +865,9 @@ Pebble.addEventListener('showConfiguration', function() {
     OpenRouterApiKey: getSetting('OpenRouterApiKey', ''),
     OpenRouterModel: getSetting('OpenRouterModel', DEFAULT_MODEL),
     EnableLocation: getBoolSetting('EnableLocation', false),
+    EnableMemory: getBoolSetting('EnableMemory', true),
     EnableSearch: getBoolSetting('EnableSearch', false),
-    BraveSearchApiKey: getSetting('BraveSearchApiKey', ''),
-    TtsModel: getSetting('TtsModel', DEFAULT_TTS_MODEL),
-    TtsVoice: getSetting('TtsVoice', DEFAULT_TTS_VOICE)
+    BraveSearchApiKey: getSetting('BraveSearchApiKey', '')
   });
   Pebble.openURL(clay.generateUrl());
 });
