@@ -9,6 +9,7 @@
 #define DICTATION_BUFFER_SIZE 512
 // Stores the accumulated assistant reply received from the phone.
 #define RESPONSE_BUFFER_SIZE 6144
+#define CHAT_HISTORY_BUFFER_SIZE 14000
 
 // Pointers to Pebble UI/session objects created at runtime.
 static Window *s_window;
@@ -19,6 +20,8 @@ static TextLayer *s_prompt_label_layer;
 static TextLayer *s_prompt_layer;
 static TextLayer *s_assistant_label_layer;
 static TextLayer *s_assistant_layer;
+static Layer *s_history_layer;
+static Layer *s_home_layer;
 static TextLayer *s_status_message_layer;
 static TextLayer *s_empty_layer;
 static DictationSession *s_dictation_session;
@@ -26,7 +29,18 @@ static DictationSession *s_dictation_session;
 // These buffers hold the current conversation state shown in the single text view.
 static char s_last_prompt[DICTATION_BUFFER_SIZE];
 static char s_assistant_response[RESPONSE_BUFFER_SIZE];
+static char s_chat_history[CHAT_HISTORY_BUFFER_SIZE];
 static char s_status_text[64];
+static bool s_start_dictation_on_appear;
+
+//AI: Append text to the session transcript without overflowing the fixed buffer.
+static void append_chat_history(const char *text) {
+  size_t current_len = strlen(s_chat_history);
+  size_t remaining = sizeof(s_chat_history) - current_len - 1;
+  if (remaining > 0) {
+    strncat(s_chat_history, text, remaining);
+  }
+}
 
 //AI: Configure a small label layer like Bobby's speaker labels.
 static void configure_label_layer(TextLayer *layer, const char *text) {
@@ -42,6 +56,66 @@ static void configure_message_layer(TextLayer *layer) {
   text_layer_set_text_color(layer, GColorBlack);
   text_layer_set_background_color(layer, GColorClear);
   text_layer_set_overflow_mode(layer, GTextOverflowModeWordWrap);
+}
+
+//AI: Draw the idle home screen: a centered black circle taking about 40% of the screen width.
+static void home_layer_update_proc(Layer *layer, GContext *ctx) {
+  GRect bounds = layer_get_bounds(layer);
+  int16_t diameter = bounds.size.w * 40 / 100;
+  GPoint center = GPoint(bounds.size.w / 2, bounds.size.h / 2);
+
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_circle(ctx, center, diameter / 2);
+}
+
+//AI: Return true for transcript speaker-name lines that should be drawn in bold.
+static bool is_history_label(const char *line) {
+  return strcmp(line, "You") == 0 || strcmp(line, "AI") == 0 || strcmp(line, "Error") == 0;
+}
+
+//AI: Measure or draw the transcript line by line so labels can be bold and bodies can wrap.
+static int16_t layout_history_text(GContext *ctx, GRect bounds, bool draw) {
+  GFont label_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GFont body_font = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+  int16_t y = 0;
+  char *line = s_chat_history;
+
+  while (line && *line) {
+    char *next = strchr(line, '\n');
+    if (next) {
+      *next = '\0';
+    }
+
+    if (line[0] != '\0') {
+      bool is_label = is_history_label(line);
+      GFont font = is_label ? label_font : body_font;
+      GRect measure_rect = GRect(0, 0, bounds.size.w, TEXT_MEASURE_HEIGHT);
+      GSize size = graphics_text_layout_get_content_size(line, font, measure_rect,
+                                                         GTextOverflowModeWordWrap, GTextAlignmentLeft);
+      GRect draw_rect = GRect(0, y, bounds.size.w, size.h + PADDING);
+      if (draw) {
+        graphics_context_set_text_color(ctx, GColorBlack);
+        graphics_draw_text(ctx, line, font, draw_rect, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+      }
+      y += size.h + (is_label ? 0 : PADDING);
+    } else {
+      y += PADDING;
+    }
+
+    if (next) {
+      *next = '\n';
+      line = next + 1;
+    } else {
+      break;
+    }
+  }
+
+  return y + PADDING;
+}
+
+//AI: Custom transcript layer update procedure, needed because TextLayer cannot mix bold and normal text.
+static void history_layer_update_proc(Layer *layer, GContext *ctx) {
+  layout_history_text(ctx, layer_get_bounds(layer), true);
 }
 
 //AI: Resize one message TextLayer to fit its current text and return its height.
@@ -69,35 +143,34 @@ static void layout_chat(bool scroll_to_bottom) {
   int16_t width = bounds.size.w;
   int16_t y = PADDING;
 
-  bool has_prompt = s_last_prompt[0] != '\0';
   bool has_response = s_assistant_response[0] != '\0';
+  bool has_history = s_chat_history[0] != '\0';
   bool show_status_message = strcmp(s_status_text, "Ready") != 0 && strcmp(s_status_text, "Done") != 0 && !has_response;
 
-  layer_set_hidden(text_layer_get_layer(s_empty_layer), has_prompt || has_response || show_status_message);
-  layer_set_hidden(text_layer_get_layer(s_prompt_label_layer), !has_prompt);
-  layer_set_hidden(text_layer_get_layer(s_prompt_layer), !has_prompt);
-  layer_set_hidden(text_layer_get_layer(s_assistant_label_layer), !has_response);
-  layer_set_hidden(text_layer_get_layer(s_assistant_layer), !has_response);
+  layer_set_hidden(s_home_layer, has_history || show_status_message);
+  layer_set_hidden(text_layer_get_layer(s_empty_layer), true);
+  layer_set_hidden(s_history_layer, !has_history);
+  layer_set_hidden(text_layer_get_layer(s_prompt_label_layer), true);
+  layer_set_hidden(text_layer_get_layer(s_prompt_layer), true);
+  layer_set_hidden(text_layer_get_layer(s_assistant_label_layer), true);
+  layer_set_hidden(text_layer_get_layer(s_assistant_layer), true);
   layer_set_hidden(text_layer_get_layer(s_status_message_layer), !show_status_message);
 
-  if (has_prompt) {
-    layer_set_frame(text_layer_get_layer(s_prompt_label_layer), GRect(PADDING, y, width - (PADDING * 2), LABEL_HEIGHT));
-    y += LABEL_HEIGHT;
-    y += resize_text_layer(s_prompt_layer, y, width);
+  if (has_history) {
+    int16_t text_width = width - (PADDING * 2);
+    int16_t history_height = layout_history_text(NULL, GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT), false);
+    layer_set_frame(s_history_layer, GRect(PADDING, y, text_width, history_height));
+    layer_mark_dirty(s_history_layer);
+    y += history_height;
   }
 
-  if (has_response) {
-    y += PADDING;
-    layer_set_frame(text_layer_get_layer(s_assistant_label_layer), GRect(PADDING, y, width - (PADDING * 2), LABEL_HEIGHT));
-    y += LABEL_HEIGHT;
-    y += resize_text_layer(s_assistant_layer, y, width);
-  } else if (show_status_message) {
+  if (show_status_message) {
     y += PADDING;
     text_layer_set_text(s_status_message_layer, s_status_text);
     y += resize_text_layer(s_status_message_layer, y, width);
   }
 
-  int16_t content_height = has_prompt || has_response || show_status_message ? y + PADDING : bounds.size.h;
+  int16_t content_height = has_history || show_status_message ? y + PADDING : bounds.size.h;
   scroll_layer_set_content_size(s_scroll_layer, GSize(width, content_height));
 
   if (scroll_to_bottom && content_height > bounds.size.h) {
@@ -137,6 +210,12 @@ static void send_prompt(const char *prompt) {
   // Store the latest prompt locally and clear the previous assistant reply.
   snprintf(s_last_prompt, sizeof(s_last_prompt), "%s", prompt);
   s_assistant_response[0] = '\0';
+  if (s_chat_history[0] != '\0') {
+    append_chat_history("\n\n");
+  }
+  append_chat_history("You\n");
+  append_chat_history(s_last_prompt);
+  append_chat_history("\n\nAI\n");
   update_display("Sending...");
 
   // Start building an outgoing AppMessage dictionary.
@@ -186,10 +265,12 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
       //USR: else add to rest of response
       //AI: Add this chunk's text onto the full assistant response buffer.
       append_response_chunk(response_tuple->value->cstring);
+      append_chat_history(response_tuple->value->cstring);
     } else {
       //USR: Else do normal start screen with status
       //AI: No chunk index means this is a complete one-piece response, so replace the old text.
       snprintf(s_assistant_response, sizeof(s_assistant_response), "%s", response_tuple->value->cstring);
+      append_chat_history(response_tuple->value->cstring);
     }
   }
 
@@ -197,6 +278,8 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   //AI: If the phone sent an error, show it in place of the assistant response and mark status as Error.
   if (error_tuple) {
     snprintf(s_assistant_response, sizeof(s_assistant_response), "%s", error_tuple->value->cstring);
+    append_chat_history("\nError\n");
+    append_chat_history(error_tuple->value->cstring);
     status = "Error";
   }
 
@@ -294,6 +377,14 @@ static void window_load(Window *window) {
   configure_message_layer(s_assistant_layer);
   scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_assistant_layer));
 
+  s_history_layer = layer_create(GRectZero);
+  layer_set_update_proc(s_history_layer, history_layer_update_proc);
+  scroll_layer_add_child(s_scroll_layer, s_history_layer);
+
+  s_home_layer = layer_create(GRect(0, 0, bounds.size.w, bounds.size.h - STATUS_BAR_LAYER_HEIGHT));
+  layer_set_update_proc(s_home_layer, home_layer_update_proc);
+  scroll_layer_add_child(s_scroll_layer, s_home_layer);
+
   s_status_message_layer = text_layer_create(GRectZero);
   configure_message_layer(s_status_message_layer);
   text_layer_set_text_color(s_status_message_layer, GColorDarkGray);
@@ -306,6 +397,14 @@ static void window_load(Window *window) {
   update_display("Ready");
 }
 
+//AI: Quick launch should behave like Bobby: open the app and immediately start listening.
+static void window_appear(Window *window) {
+  if (s_start_dictation_on_appear) {
+    s_start_dictation_on_appear = false;
+    dictation_session_start(s_dictation_session);
+  }
+}
+
 // Destroy UI objects created in window_load().
 static void window_unload(Window *window) {
   // These objects were heap-allocated in window_load(), so they must be destroyed here.
@@ -314,6 +413,8 @@ static void window_unload(Window *window) {
   text_layer_destroy(s_prompt_layer);
   text_layer_destroy(s_assistant_label_layer);
   text_layer_destroy(s_assistant_layer);
+  layer_destroy(s_history_layer);
+  layer_destroy(s_home_layer);
   text_layer_destroy(s_status_message_layer);
   status_bar_layer_destroy(s_status_layer);
   layer_destroy(s_scroll_indicator_down);
@@ -327,10 +428,9 @@ static void init(void) {
   window_set_window_handlers(s_window, (WindowHandlers) { //USR: something with the scroll layer?
     //AI: Register which functions Pebble should call when this window loads and unloads.
     .load = window_load,
+    .appear = window_appear,
     .unload = window_unload
   });
-  window_stack_push(s_window, true); //USR: Make our window appear on the screen
-  //AI: Push the window onto Pebble's window stack so it appears on screen, with animation.
 
   app_message_register_inbox_received(inbox_received_callback); //USR: IDK, something with the AppMessage?
   //AI: Register the function that should run when a message arrives from the phone.
@@ -340,6 +440,10 @@ static void init(void) {
   s_dictation_session = dictation_session_create(DICTATION_BUFFER_SIZE, dictation_callback, NULL); //USR: Start the dictation deamon? with a buffersize?
   //AI: Create a dictation session; Pebble will call dictation_callback when speech recognition finishes.
   dictation_session_enable_confirmation(s_dictation_session, false); // Purposly set to false
+
+  s_start_dictation_on_appear = launch_reason() == APP_LAUNCH_QUICK_LAUNCH;
+  window_stack_push(s_window, true); //USR: Make our window appear on the screen
+  //AI: Push the window onto Pebble's window stack so it appears on screen, with animation.
 }
 
 // Release resources before the app exits.
