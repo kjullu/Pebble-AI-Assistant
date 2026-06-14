@@ -1,3 +1,5 @@
+Look at https://apps.repebble.com/7ee7208cdc8c49a280326abd
+
 # Pebble AI Chat
 
 Minimal Pebble Time 2/Core Devices watchapp for chatting with an AI assistant through OpenRouter.
