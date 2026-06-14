@@ -48,15 +48,15 @@ module.exports = [
       },
       {
         "type": "toggle",
-        "messageKey": "EnableMemory",
-        "label": "Enable Memory",
-        "defaultValue": true
-      },
-      {
-        "type": "toggle",
         "messageKey": "EnableSearch",
         "label": "Enable Brave Search",
         "defaultValue": false
+      },
+      {
+        "type": "toggle",
+        "messageKey": "EnableCalculator",
+        "label": "Enable Calculator",
+        "defaultValue": true
       },
       {
         "type": "input",
@@ -76,6 +76,12 @@ module.exports = [
         "defaultValue": "Prompt & Memory"
       },
       {
+        "type": "toggle",
+        "messageKey": "EnableMemory",
+        "label": "Enable Memory",
+        "defaultValue": true
+      },
+      {
         "type": "input",
         "messageKey": "ExtraSystemPrompt",
         "label": "Extra System Prompt",
@@ -91,6 +97,15 @@ module.exports = [
         "description": "One note per line. These are sent to the AI as memory.",
         "attributes": {
           "placeholder": "User prefers 24-hour time."
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "OpenSessions",
+        "label": "Saved Sessions",
+        "description": "Last 20 sessions. Delete by editing this field and saving.",
+        "attributes": {
+          "placeholder": "No saved sessions yet."
         }
       }
     ]

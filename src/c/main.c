@@ -25,6 +25,7 @@ static Layer *s_history_layer;
 static Layer *s_home_layer;
 static TextLayer *s_status_message_layer;
 static TextLayer *s_settings_layer;
+static TextLayer *s_sessions_layer;
 static TextLayer *s_empty_layer;
 static DictationSession *s_dictation_session;
 
@@ -34,15 +35,16 @@ static char s_assistant_response[RESPONSE_BUFFER_SIZE];
 static char s_chat_history[CHAT_HISTORY_BUFFER_SIZE];
 static char s_status_text[64];
 static char s_stats_text[STATS_BUFFER_SIZE];
+static char s_sessions_text[1600];
 static bool s_start_dictation_on_appear;
 static bool s_show_home = true;
 static bool s_request_active;
 static bool s_response_started;
 static bool s_show_settings;
+static bool s_show_sessions;
 static bool s_settings_return_home;
 static int s_settings_selection;
 static bool s_location_enabled;
-static bool s_memory_enabled = true;
 static bool s_search_enabled;
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
 static AppTimer *s_touch_long_timer;
@@ -56,23 +58,33 @@ static void update_display(const char *status);
 static void clear_watch_session(void);
 static void send_simple_command(uint32_t key, const char *failure_status);
 static void toggle_selected_setting(void);
+static void open_sessions_screen(void);
 
 static void update_settings_text(void) {
   static char settings_text[160];
   snprintf(settings_text, sizeof(settings_text),
-           "%c Location: %s\n%c Memory: %s\n%c Search: %s",
+           "%c Location: %s\n%c Search: %s",
            s_settings_selection == 0 ? '>' : ' ', s_location_enabled ? "on" : "off",
-           s_settings_selection == 1 ? '>' : ' ', s_memory_enabled ? "on" : "off",
-           s_settings_selection == 2 ? '>' : ' ', s_search_enabled ? "on" : "off");
+           s_settings_selection == 1 ? '>' : ' ', s_search_enabled ? "on" : "off");
   text_layer_set_text(s_settings_layer, settings_text);
 }
 
 static void open_settings_screen(void) {
   s_settings_return_home = s_show_home;
   s_show_settings = true;
+  s_show_sessions = false;
   s_show_home = false;
   update_settings_text();
   update_display("Ready");
+}
+
+static void open_sessions_screen(void) {
+  s_settings_return_home = s_show_home;
+  s_show_sessions = true;
+  s_show_settings = false;
+  s_show_home = false;
+  update_display("Ready");
+  send_simple_command(MESSAGE_KEY_OpenSessions, "Sessions unavailable");
 }
 
 static void send_simple_command(uint32_t key, const char *failure_status) {
@@ -219,10 +231,11 @@ static void layout_chat(bool scroll_to_bottom) {
   bool has_history = s_chat_history[0] != '\0';
   bool show_status_message = strcmp(s_status_text, "Ready") != 0 && strcmp(s_status_text, "Done") != 0 && !has_response;
 
-  layer_set_hidden(s_home_layer, s_show_settings || !s_show_home || show_status_message);
+  layer_set_hidden(s_home_layer, s_show_settings || s_show_sessions || !s_show_home || show_status_message);
   layer_set_hidden(text_layer_get_layer(s_empty_layer), true);
-  layer_set_hidden(s_history_layer, s_show_settings || s_show_home || !has_history);
+  layer_set_hidden(s_history_layer, s_show_settings || s_show_sessions || s_show_home || !has_history);
   layer_set_hidden(text_layer_get_layer(s_settings_layer), !s_show_settings);
+  layer_set_hidden(text_layer_get_layer(s_sessions_layer), !s_show_sessions);
   layer_set_hidden(text_layer_get_layer(s_prompt_label_layer), true);
   layer_set_hidden(text_layer_get_layer(s_prompt_layer), true);
   layer_set_hidden(text_layer_get_layer(s_assistant_label_layer), true);
@@ -234,7 +247,12 @@ static void layout_chat(bool scroll_to_bottom) {
     y += resize_text_layer(s_settings_layer, y, width);
   }
 
-  if (!s_show_settings && !s_show_home && has_history) {
+  if (s_show_sessions) {
+    text_layer_set_text(s_sessions_layer, s_sessions_text[0] ? s_sessions_text : "No saved sessions.");
+    y += resize_text_layer(s_sessions_layer, y, width);
+  }
+
+  if (!s_show_settings && !s_show_sessions && !s_show_home && has_history) {
     int16_t text_width = width - (PADDING * 2);
     int16_t history_height = layout_history_text(NULL, GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT), false);
     layer_set_frame(s_history_layer, GRect(PADDING, y, text_width, history_height));
@@ -249,7 +267,7 @@ static void layout_chat(bool scroll_to_bottom) {
   }
 
   int16_t content_height;
-  if (s_show_settings || (!s_show_home && has_history) || show_status_message) {
+  if (s_show_settings || s_show_sessions || (!s_show_home && has_history) || show_status_message) {
     content_height = y + PADDING;
   } else {
     int16_t text_width = width - (PADDING * 2);
@@ -397,7 +415,6 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   if (status_tuple && strcmp(status, "Cancelled") == 0) {
     s_request_active = false;
   } else if (status_tuple && (strcmp(status, "Location on") == 0 || strcmp(status, "Location off") == 0 ||
-                              strcmp(status, "Memory on") == 0 || strcmp(status, "Memory off") == 0 ||
                               strcmp(status, "Search on") == 0 || strcmp(status, "Search off") == 0)) {
     vibes_short_pulse();
     status = "Ready";
@@ -411,10 +428,19 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   if (tool_states_tuple) {
     const char *states = tool_states_tuple->value->cstring;
     s_location_enabled = strstr(states, "location=1") != NULL;
-    s_memory_enabled = strstr(states, "memory=1") != NULL;
     s_search_enabled = strstr(states, "search=1") != NULL;
     if (s_show_settings) {
       update_settings_text();
+    }
+  }
+
+  {
+    Tuple *sessions_tuple = dict_find(iter, MESSAGE_KEY_OpenSessions);
+    if (sessions_tuple) {
+      snprintf(s_sessions_text, sizeof(s_sessions_text), "%s", sessions_tuple->value->cstring);
+      if (s_show_sessions) {
+        update_display("Ready");
+      }
     }
   }
 
@@ -462,6 +488,13 @@ static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
     return;
   }
 
+  if (s_show_sessions) {
+    s_show_sessions = false;
+    s_show_home = s_settings_return_home;
+    update_display("Ready");
+    return;
+  }
+
   if (s_request_active) {
     s_request_active = false;
     update_display("Cancelling...");
@@ -483,12 +516,12 @@ static void up_long_click_handler(ClickRecognizerRef recognizer, void *context) 
 }
 
 static void down_long_click_handler(ClickRecognizerRef recognizer, void *context) {
-  send_simple_command(MESSAGE_KEY_ToggleMemory, "Toggle failed");
+  open_sessions_screen();
 }
 
 static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
   if (s_show_settings) {
-    s_settings_selection = (s_settings_selection + 2) % 3;
+    s_settings_selection = (s_settings_selection + 1) % 2;
     update_display("Ready");
   } else if (s_show_home) {
     open_settings_screen();
@@ -500,8 +533,10 @@ static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
 
 static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
   if (s_show_settings) {
-    s_settings_selection = (s_settings_selection + 1) % 3;
+    s_settings_selection = (s_settings_selection + 1) % 2;
     update_display("Ready");
+  } else if (s_show_home) {
+    open_sessions_screen();
   } else {
     scroll_layer_set_content_offset(s_scroll_layer,
                                     GPoint(0, scroll_layer_get_content_offset(s_scroll_layer).y - 40), false);
@@ -514,9 +549,6 @@ static void toggle_selected_setting(void) {
       send_simple_command(MESSAGE_KEY_ToggleLocation, "Toggle failed");
       break;
     case 1:
-      send_simple_command(MESSAGE_KEY_ToggleMemory, "Toggle failed");
-      break;
-    case 2:
       send_simple_command(MESSAGE_KEY_ToggleSearch, "Toggle failed");
       break;
   }
@@ -682,6 +714,10 @@ static void window_load(Window *window) {
   configure_message_layer(s_settings_layer);
   scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_settings_layer));
 
+  s_sessions_layer = text_layer_create(GRectZero);
+  configure_message_layer(s_sessions_layer);
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_sessions_layer));
+
   //AI: This must be added after the scroll layer so the down indicator appears on top.
   layer_add_child(window_layer, s_scroll_indicator_down);
 
@@ -723,6 +759,7 @@ static void window_unload(Window *window) {
   layer_destroy(s_home_layer);
   text_layer_destroy(s_status_message_layer);
   text_layer_destroy(s_settings_layer);
+  text_layer_destroy(s_sessions_layer);
   status_bar_layer_destroy(s_status_layer);
   layer_destroy(s_scroll_indicator_down);
   scroll_layer_destroy(s_scroll_layer);

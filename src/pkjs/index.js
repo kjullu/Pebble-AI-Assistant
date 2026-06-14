@@ -12,6 +12,7 @@ var RESPONSE_CHUNK_CHARS = 700;
 var MAX_SEARCH_RESULTS = 3;
 var MAX_NOTES = 30;
 var MAX_NOTE_CHARS = 240;
+var MAX_SESSIONS = 20;
 
 var history = [];
 var sendQueue = [];
@@ -227,6 +228,7 @@ function buildStatsText() {
     'Searches: ' + Number(stats.searches || 0),
     'Location: ' + (getBoolSetting('EnableLocation', false) ? 'on' : 'off'),
     'Memory: ' + (getBoolSetting('EnableMemory', true) ? 'on' : 'off'),
+    'Calculator: ' + (getBoolSetting('EnableCalculator', true) ? 'on' : 'off'),
     'Search: ' + (getBoolSetting('EnableSearch', false) ? 'on' : 'off'),
     model
   ].join('\n');
@@ -240,6 +242,7 @@ function sendToolStatesToWatch() {
   sendToWatch({
     ToolStates: 'location=' + (getBoolSetting('EnableLocation', false) ? '1' : '0') +
       ';memory=' + (getBoolSetting('EnableMemory', true) ? '1' : '0') +
+      ';calculator=' + (getBoolSetting('EnableCalculator', true) ? '1' : '0') +
       ';search=' + (getBoolSetting('EnableSearch', false) ? '1' : '0')
   });
 }
@@ -312,6 +315,70 @@ function getNotes() {
 
 function saveNotes(notes) {
   localStorage.setItem('NotesMemory', JSON.stringify(notes.slice(Math.max(0, notes.length - MAX_NOTES))));
+}
+
+function getSessions() {
+  try {
+    var sessions = JSON.parse(localStorage.getItem('SavedSessions') || '[]');
+    return sessions && sessions.length !== undefined ? sessions : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveSessions(sessions) {
+  localStorage.setItem('SavedSessions', JSON.stringify(sessions.slice(Math.max(0, sessions.length - MAX_SESSIONS))));
+}
+
+function sessionsToText() {
+  var sessions = getSessions();
+  if (sessions.length === 0) {
+    return 'No saved sessions yet.';
+  }
+
+  var lines = [];
+  for (var i = 0; i < sessions.length; i++) {
+    lines.push('Session ' + (i + 1) + ' | ' + sessions[i].createdAt);
+    lines.push(sessions[i].summary || '(empty)');
+    if (i !== sessions.length - 1) {
+      lines.push('---');
+    }
+  }
+  return lines.join('\n');
+}
+
+function saveSessionsFromText(text) {
+  var chunks = String(text || '').split('\n---\n');
+  var sessions = [];
+  for (var i = 0; i < chunks.length; i++) {
+    var chunk = chunks[i].replace(/^\s+|\s+$/g, '');
+    if (!chunk || chunk === 'No saved sessions yet.') {
+      continue;
+    }
+    var lines = chunk.split('\n');
+    if (lines.length >= 2) {
+      sessions.push({
+        createdAt: lines[0].replace(/^Session\s+\d+\s+\|\s+/, ''),
+        summary: lines.slice(1).join('\n')
+      });
+    }
+  }
+  saveSessions(sessions);
+}
+
+function saveCurrentSessionToHistory() {
+  var sessions = getSessions();
+  var summary = history.map(function(entry) {
+    return entry.role + ': ' + entry.content;
+  }).join('\n');
+  if (!summary) {
+    return;
+  }
+  sessions.push({
+    createdAt: new Date().toISOString(),
+    summary: clip(summary, 1200)
+  });
+  saveSessions(sessions);
 }
 
 function notesToText() {
@@ -389,10 +456,12 @@ function saveSettings(convertedSettings, rawSettings) {
   var model = settingValue(convertedSettings, rawSettings, 'OpenRouterModel', messageKeys.OpenRouterModel);
   var enableLocation = settingValue(convertedSettings, rawSettings, 'EnableLocation', messageKeys.EnableLocation);
   var enableMemory = settingValue(convertedSettings, rawSettings, 'EnableMemory', messageKeys.EnableMemory);
+  var enableCalculator = settingValue(convertedSettings, rawSettings, 'EnableCalculator', messageKeys.EnableCalculator);
   var enableSearch = settingValue(convertedSettings, rawSettings, 'EnableSearch', messageKeys.EnableSearch);
   var braveApiKey = settingValue(convertedSettings, rawSettings, 'BraveSearchApiKey', messageKeys.BraveSearchApiKey);
   var extraSystemPrompt = settingValue(convertedSettings, rawSettings, 'ExtraSystemPrompt', messageKeys.ExtraSystemPrompt);
   var notesMemoryText = settingValue(convertedSettings, rawSettings, 'NotesMemoryText', messageKeys.NotesMemoryText);
+  var sessionsText = settingValue(convertedSettings, rawSettings, 'OpenSessions', messageKeys.OpenSessions);
   var statsUsedCredits = settingValue(convertedSettings, rawSettings, 'StatsUsedCredits', messageKeys.StatsUsedCredits);
   var statsMessages = settingValue(convertedSettings, rawSettings, 'StatsMessages', messageKeys.StatsMessages);
   var statsSearches = settingValue(convertedSettings, rawSettings, 'StatsSearches', messageKeys.StatsSearches);
@@ -409,6 +478,9 @@ function saveSettings(convertedSettings, rawSettings) {
   if (enableMemory !== undefined) {
     localStorage.setItem('EnableMemory', String(enableMemory ? 1 : 0));
   }
+  if (enableCalculator !== undefined) {
+    localStorage.setItem('EnableCalculator', String(enableCalculator ? 1 : 0));
+  }
   if (enableSearch !== undefined) {
     localStorage.setItem('EnableSearch', String(enableSearch ? 1 : 0));
   }
@@ -421,6 +493,9 @@ function saveSettings(convertedSettings, rawSettings) {
   if (notesMemoryText !== undefined) {
     saveNotesFromText(notesMemoryText);
   }
+  if (sessionsText !== undefined) {
+    saveSessionsFromText(sessionsText);
+  }
   saveEditableStats(statsUsedCredits, statsMessages, statsSearches);
 }
 
@@ -432,7 +507,7 @@ function buildSystemPrompt() {
     'Search tool: if current web info is needed and search is available, return {"reply":"Searching...","timeline":null,"search":"short query","notes":null}. Request search at most once; after results are provided, answer and set search null.',
     'Timeline tool: if the user asks to add/schedule/remind/put something on the timeline, set timeline to {"title":"short title","time":"ISO-8601 UTC date-time","body":"details","durationMinutes":30,"reminderMinutes":10}. If time is ambiguous, ask a short clarifying question and keep timeline null.',
     'Notes tool: add notes only for durable user preferences/facts or explicit "remember" requests. Put short note strings in notes. Do not duplicate existing memory or store temporary facts. The notes are your database; add things you think are important.',
-    'Calculator tool: if exact arithmetic or conversion is needed, return calc as either {"expression":"2+2*10"} or {"value":12,"from":"eur","to":"dkk"}. After the result is provided, answer and set calc null.'
+    'Calculator tool: if exact arithmetic or conversion is needed and calculator is available, return calc as either {"expression":"2+2*10"} or {"value":12,"from":"eur","to":"dkk"}. After the result is provided, answer and set calc null.'
   ].join(' ');
   var extra = getSetting('ExtraSystemPrompt', '');
   if (extra) {
@@ -1049,6 +1124,7 @@ function finishAssistantTurn(prompt, parsed, alreadySent) {
     }
   }
 
+  saveCurrentSessionToHistory();
   sendStatsToWatch();
 }
 
@@ -1068,6 +1144,10 @@ function callOpenRouter(prompt) {
     if (!searchAvailable || !promptLooksLikeSearch(prompt)) {
       callModelStream(firstMessages, generation, function(parsed, alreadySent) {
         if (parsed.calc) {
+          if (!getBoolSetting('EnableCalculator', true)) {
+            showError('Calculator disabled.', 'Model requested calculator tool while disabled');
+            return;
+          }
           try {
             var calculatorResultsText = runCalculatorTool(parsed.calc);
             debugLog('calculator tool result=' + calculatorResultsText);
@@ -1099,6 +1179,10 @@ function callOpenRouter(prompt) {
           });
         });
       } else if (parsed.calc) {
+        if (!getBoolSetting('EnableCalculator', true)) {
+          showError('Calculator disabled.', 'Model requested calculator tool while disabled');
+          return;
+        }
         try {
           var calculatorResultsText = runCalculatorTool(parsed.calc);
           debugLog('calculator tool result=' + calculatorResultsText);
@@ -1248,6 +1332,11 @@ Pebble.addEventListener('appmessage', function(e) {
     return;
   }
 
+  if (e.payload && e.payload.OpenSessions) {
+    sendToWatch({ OpenSessions: sessionsToText() });
+    return;
+  }
+
   if (e.payload && e.payload.CancelRequest) {
     cancelActiveRequests();
     return;
@@ -1270,6 +1359,7 @@ Pebble.addEventListener('showConfiguration', function() {
   var stats = getMonthlyStats();
   clay.setSettings({
     NotesMemoryText: notesToText(),
+    OpenSessions: sessionsToText(),
     StatsUsedCredits: String(stats.usageCredits || 0),
     StatsMessages: String(stats.messages || 0),
     StatsSearches: String(stats.searches || 0),
@@ -1278,6 +1368,7 @@ Pebble.addEventListener('showConfiguration', function() {
     OpenRouterModel: getSetting('OpenRouterModel', DEFAULT_MODEL),
     EnableLocation: getBoolSetting('EnableLocation', false),
     EnableMemory: getBoolSetting('EnableMemory', true),
+    EnableCalculator: getBoolSetting('EnableCalculator', true),
     EnableSearch: getBoolSetting('EnableSearch', false),
     BraveSearchApiKey: getSetting('BraveSearchApiKey', ''),
     DebugLog: localStorage.getItem('DebugLog') || ''
