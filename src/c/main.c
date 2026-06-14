@@ -25,7 +25,7 @@ static Layer *s_history_layer;
 static Layer *s_home_layer;
 static TextLayer *s_status_message_layer;
 static TextLayer *s_settings_layer;
-static TextLayer *s_sessions_layer;
+static Layer *s_sessions_layer;
 static TextLayer *s_empty_layer;
 static DictationSession *s_dictation_session;
 
@@ -61,6 +61,63 @@ static void clear_watch_session(void);
 static void send_simple_command(uint32_t key, const char *failure_status);
 static void toggle_selected_setting(void);
 static void open_sessions_screen(void);
+
+static bool is_session_header(const char *line) {
+  return strncmp(line, "Session ", 8) == 0;
+}
+
+static bool is_session_label(const char *line) {
+  return strncmp(line, "user:", 5) == 0 || strncmp(line, "assistant:", 10) == 0 || strncmp(line, "User:", 5) == 0 || strncmp(line, "Assistant:", 10) == 0;
+}
+
+static int16_t layout_sessions_text(GContext *ctx, GRect bounds, bool draw) {
+  GFont header_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GFont label_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+  GFont body_font = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+  int16_t y = 0;
+  char *line = s_sessions_text;
+
+  while (line && *line) {
+    char *next = strchr(line, '\n');
+    if (next) {
+      *next = '\0';
+    }
+
+    if (line[0] != '\0') {
+      GFont font = body_font;
+      if (is_session_header(line)) {
+        font = header_font;
+      } else if (is_session_label(line)) {
+        font = label_font;
+      }
+
+      GRect measure_rect = GRect(0, 0, bounds.size.w, TEXT_MEASURE_HEIGHT);
+      GSize size = graphics_text_layout_get_content_size(line, font, measure_rect,
+                                                         GTextOverflowModeWordWrap, GTextAlignmentLeft);
+      GRect draw_rect = GRect(0, y, bounds.size.w, size.h + PADDING);
+      if (draw) {
+        graphics_context_set_text_color(ctx, GColorBlack);
+        graphics_draw_text(ctx, line, font, draw_rect, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+      }
+      y += size.h + PADDING;
+    } else {
+      y += PADDING;
+    }
+
+    if (next) {
+      *next = '\n';
+      line = next + 1;
+    } else {
+      break;
+    }
+  }
+
+  return y + PADDING;
+}
+
+static void sessions_layer_update_proc(Layer *layer, GContext *ctx) {
+  layout_sessions_text(ctx, layer_get_bounds(layer), true);
+}
 
 static void update_settings_text(void) {
   static char settings_text[160];
@@ -239,7 +296,7 @@ static void layout_chat(bool scroll_to_bottom) {
   layer_set_hidden(text_layer_get_layer(s_empty_layer), true);
   layer_set_hidden(s_history_layer, s_show_settings || s_show_sessions || s_show_home || !has_history);
   layer_set_hidden(text_layer_get_layer(s_settings_layer), !s_show_settings);
-  layer_set_hidden(text_layer_get_layer(s_sessions_layer), !s_show_sessions);
+  layer_set_hidden(s_sessions_layer, !s_show_sessions);
   layer_set_hidden(text_layer_get_layer(s_prompt_label_layer), true);
   layer_set_hidden(text_layer_get_layer(s_prompt_layer), true);
   layer_set_hidden(text_layer_get_layer(s_assistant_label_layer), true);
@@ -252,8 +309,11 @@ static void layout_chat(bool scroll_to_bottom) {
   }
 
   if (s_show_sessions) {
-    text_layer_set_text(s_sessions_layer, s_sessions_text[0] ? s_sessions_text : "No saved sessions.");
-    y += resize_text_layer(s_sessions_layer, y, width);
+    int16_t text_width = width - (PADDING * 2);
+    int16_t sessions_height = layout_sessions_text(NULL, GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT), false);
+    layer_set_frame(s_sessions_layer, GRect(PADDING, y, text_width, sessions_height));
+    layer_mark_dirty(s_sessions_layer);
+    y += sessions_height;
   }
 
   if (!s_show_settings && !s_show_sessions && !s_show_home && has_history) {
@@ -728,9 +788,9 @@ static void window_load(Window *window) {
   configure_message_layer(s_settings_layer);
   scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_settings_layer));
 
-  s_sessions_layer = text_layer_create(GRectZero);
-  configure_message_layer(s_sessions_layer);
-  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_sessions_layer));
+  s_sessions_layer = layer_create(GRectZero);
+  layer_set_update_proc(s_sessions_layer, sessions_layer_update_proc);
+  scroll_layer_add_child(s_scroll_layer, s_sessions_layer);
 
   //AI: This must be added after the scroll layer so the down indicator appears on top.
   layer_add_child(window_layer, s_scroll_indicator_down);
@@ -773,7 +833,7 @@ static void window_unload(Window *window) {
   layer_destroy(s_home_layer);
   text_layer_destroy(s_status_message_layer);
   text_layer_destroy(s_settings_layer);
-  text_layer_destroy(s_sessions_layer);
+  layer_destroy(s_sessions_layer);
   status_bar_layer_destroy(s_status_layer);
   layer_destroy(s_scroll_indicator_down);
   scroll_layer_destroy(s_scroll_layer);

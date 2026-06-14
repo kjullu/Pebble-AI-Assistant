@@ -334,7 +334,8 @@ function sessionsToText() {
 
   var lines = [];
   for (var i = 0; i < sessions.length; i++) {
-    lines.push('Session ' + (i + 1) + ' | ' + sessions[i].createdAt);
+    lines.push('Session ' + (i + 1));
+    lines.push(sessions[i].createdAt);
     lines.push(sessions[i].summary || '(empty)');
     if (i !== sessions.length - 1) {
       lines.push('---');
