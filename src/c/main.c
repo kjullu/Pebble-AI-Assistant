@@ -24,6 +24,7 @@ static TextLayer *s_assistant_layer;
 static Layer *s_history_layer;
 static Layer *s_home_layer;
 static TextLayer *s_status_message_layer;
+static TextLayer *s_settings_layer;
 static TextLayer *s_empty_layer;
 static DictationSession *s_dictation_session;
 
@@ -37,6 +38,12 @@ static bool s_start_dictation_on_appear;
 static bool s_show_home = true;
 static bool s_request_active;
 static bool s_response_started;
+static bool s_show_settings;
+static bool s_settings_return_home;
+static int s_settings_selection;
+static bool s_location_enabled;
+static bool s_memory_enabled = true;
+static bool s_search_enabled;
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
 static AppTimer *s_touch_long_timer;
 static bool s_touch_long_fired;
@@ -48,6 +55,25 @@ static int16_t s_touch_last_y;
 static void update_display(const char *status);
 static void clear_watch_session(void);
 static void send_simple_command(uint32_t key, const char *failure_status);
+static void toggle_selected_setting(void);
+
+static void update_settings_text(void) {
+  static char settings_text[160];
+  snprintf(settings_text, sizeof(settings_text),
+           "%c Location: %s\n%c Memory: %s\n%c Search: %s",
+           s_settings_selection == 0 ? '>' : ' ', s_location_enabled ? "on" : "off",
+           s_settings_selection == 1 ? '>' : ' ', s_memory_enabled ? "on" : "off",
+           s_settings_selection == 2 ? '>' : ' ', s_search_enabled ? "on" : "off");
+  text_layer_set_text(s_settings_layer, settings_text);
+}
+
+static void open_settings_screen(void) {
+  s_settings_return_home = s_show_home;
+  s_show_settings = true;
+  s_show_home = false;
+  update_settings_text();
+  update_display("Ready");
+}
 
 static void send_simple_command(uint32_t key, const char *failure_status) {
   DictionaryIterator *iter;
@@ -193,16 +219,22 @@ static void layout_chat(bool scroll_to_bottom) {
   bool has_history = s_chat_history[0] != '\0';
   bool show_status_message = strcmp(s_status_text, "Ready") != 0 && strcmp(s_status_text, "Done") != 0 && !has_response;
 
-  layer_set_hidden(s_home_layer, !s_show_home || show_status_message);
+  layer_set_hidden(s_home_layer, s_show_settings || !s_show_home || show_status_message);
   layer_set_hidden(text_layer_get_layer(s_empty_layer), true);
-  layer_set_hidden(s_history_layer, s_show_home || !has_history);
+  layer_set_hidden(s_history_layer, s_show_settings || s_show_home || !has_history);
+  layer_set_hidden(text_layer_get_layer(s_settings_layer), !s_show_settings);
   layer_set_hidden(text_layer_get_layer(s_prompt_label_layer), true);
   layer_set_hidden(text_layer_get_layer(s_prompt_layer), true);
   layer_set_hidden(text_layer_get_layer(s_assistant_label_layer), true);
   layer_set_hidden(text_layer_get_layer(s_assistant_layer), true);
   layer_set_hidden(text_layer_get_layer(s_status_message_layer), !show_status_message);
 
-  if (!s_show_home && has_history) {
+  if (s_show_settings) {
+    update_settings_text();
+    y += resize_text_layer(s_settings_layer, y, width);
+  }
+
+  if (!s_show_settings && !s_show_home && has_history) {
     int16_t text_width = width - (PADDING * 2);
     int16_t history_height = layout_history_text(NULL, GRect(0, 0, text_width, TEXT_MEASURE_HEIGHT), false);
     layer_set_frame(s_history_layer, GRect(PADDING, y, text_width, history_height));
@@ -217,7 +249,7 @@ static void layout_chat(bool scroll_to_bottom) {
   }
 
   int16_t content_height;
-  if ((!s_show_home && has_history) || show_status_message) {
+  if (s_show_settings || (!s_show_home && has_history) || show_status_message) {
     content_height = y + PADDING;
   } else {
     int16_t text_width = width - (PADDING * 2);
@@ -307,6 +339,7 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   Tuple *chunk_index_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkIndex);
   Tuple *chunk_done_tuple = dict_find(iter, MESSAGE_KEY_ResponseChunkDone);
   Tuple *stats_tuple = dict_find(iter, MESSAGE_KEY_StatsText);
+  Tuple *tool_states_tuple = dict_find(iter, MESSAGE_KEY_ToolStates);
   Tuple *error_tuple = dict_find(iter, MESSAGE_KEY_Error);
 
   //USR: Default status to Ready. if status_tuple- is set, then use that for status (as a string?)
@@ -364,13 +397,25 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   if (status_tuple && strcmp(status, "Cancelled") == 0) {
     s_request_active = false;
   } else if (status_tuple && (strcmp(status, "Location on") == 0 || strcmp(status, "Location off") == 0 ||
-                              strcmp(status, "Memory on") == 0 || strcmp(status, "Memory off") == 0)) {
+                              strcmp(status, "Memory on") == 0 || strcmp(status, "Memory off") == 0 ||
+                              strcmp(status, "Search on") == 0 || strcmp(status, "Search off") == 0)) {
     vibes_short_pulse();
+    status = "Ready";
   }
 
   if (stats_tuple) {
     snprintf(s_stats_text, sizeof(s_stats_text), "%s", stats_tuple->value->cstring);
     layer_mark_dirty(s_home_layer);
+  }
+
+  if (tool_states_tuple) {
+    const char *states = tool_states_tuple->value->cstring;
+    s_location_enabled = strstr(states, "location=1") != NULL;
+    s_memory_enabled = strstr(states, "memory=1") != NULL;
+    s_search_enabled = strstr(states, "search=1") != NULL;
+    if (s_show_settings) {
+      update_settings_text();
+    }
   }
 
   //USR: Update text/display with new info
@@ -394,6 +439,11 @@ static void dictation_callback(DictationSession *session, DictationSessionStatus
 
 // SELECT is the only app-specific button action; UP/DOWN are kept for scrolling.
 static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_settings) {
+    toggle_selected_setting();
+    return;
+  }
+
   // Ask Pebble to show its dictation UI and start listening to the microphone.
   dictation_session_start(s_dictation_session);
 }
@@ -405,6 +455,13 @@ static void select_long_click_handler(ClickRecognizerRef recognizer, void *conte
 }
 
 static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_settings) {
+    s_show_settings = false;
+    s_show_home = s_settings_return_home;
+    update_display("Ready");
+    return;
+  }
+
   if (s_request_active) {
     s_request_active = false;
     update_display("Cancelling...");
@@ -422,13 +479,47 @@ static void back_click_handler(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void up_long_click_handler(ClickRecognizerRef recognizer, void *context) {
-  update_display("Toggling location...");
-  send_simple_command(MESSAGE_KEY_ToggleLocation, "Toggle failed");
+  open_settings_screen();
 }
 
 static void down_long_click_handler(ClickRecognizerRef recognizer, void *context) {
-  update_display("Toggling memory...");
   send_simple_command(MESSAGE_KEY_ToggleMemory, "Toggle failed");
+}
+
+static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_settings) {
+    s_settings_selection = (s_settings_selection + 2) % 3;
+    update_display("Ready");
+  } else if (s_show_home) {
+    open_settings_screen();
+  } else {
+    scroll_layer_set_content_offset(s_scroll_layer,
+                                    GPoint(0, scroll_layer_get_content_offset(s_scroll_layer).y + 40), false);
+  }
+}
+
+static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_settings) {
+    s_settings_selection = (s_settings_selection + 1) % 3;
+    update_display("Ready");
+  } else {
+    scroll_layer_set_content_offset(s_scroll_layer,
+                                    GPoint(0, scroll_layer_get_content_offset(s_scroll_layer).y - 40), false);
+  }
+}
+
+static void toggle_selected_setting(void) {
+  switch (s_settings_selection) {
+    case 0:
+      send_simple_command(MESSAGE_KEY_ToggleLocation, "Toggle failed");
+      break;
+    case 1:
+      send_simple_command(MESSAGE_KEY_ToggleMemory, "Toggle failed");
+      break;
+    case 2:
+      send_simple_command(MESSAGE_KEY_ToggleSearch, "Toggle failed");
+      break;
+  }
 }
 
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
@@ -503,6 +594,8 @@ static void touch_handler(const TouchEvent *event, void *context) {
 static void scroll_click_config_provider(void *context) {
   // Bind the SELECT button to our custom handler.
   window_single_click_subscribe(BUTTON_ID_BACK, back_click_handler);
+  window_single_click_subscribe(BUTTON_ID_UP, up_click_handler);
+  window_single_click_subscribe(BUTTON_ID_DOWN, down_click_handler);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
   window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click_handler, NULL);
   window_long_click_subscribe(BUTTON_ID_UP, 700, up_long_click_handler, NULL);
@@ -585,6 +678,10 @@ static void window_load(Window *window) {
   text_layer_set_text_color(s_status_message_layer, GColorDarkGray);
   scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_status_message_layer));
 
+  s_settings_layer = text_layer_create(GRectZero);
+  configure_message_layer(s_settings_layer);
+  scroll_layer_add_child(s_scroll_layer, text_layer_get_layer(s_settings_layer));
+
   //AI: This must be added after the scroll layer so the down indicator appears on top.
   layer_add_child(window_layer, s_scroll_indicator_down);
 
@@ -625,6 +722,7 @@ static void window_unload(Window *window) {
   layer_destroy(s_history_layer);
   layer_destroy(s_home_layer);
   text_layer_destroy(s_status_message_layer);
+  text_layer_destroy(s_settings_layer);
   status_bar_layer_destroy(s_status_layer);
   layer_destroy(s_scroll_indicator_down);
   scroll_layer_destroy(s_scroll_layer);

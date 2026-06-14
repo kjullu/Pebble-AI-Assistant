@@ -236,6 +236,14 @@ function sendStatsToWatch() {
   sendToWatch({ StatsText: buildStatsText() });
 }
 
+function sendToolStatesToWatch() {
+  sendToWatch({
+    ToolStates: 'location=' + (getBoolSetting('EnableLocation', false) ? '1' : '0') +
+      ';memory=' + (getBoolSetting('EnableMemory', true) ? '1' : '0') +
+      ';search=' + (getBoolSetting('EnableSearch', false) ? '1' : '0')
+  });
+}
+
 function refreshRemainingCredits() {
   var apiKey = getSetting('OpenRouterApiKey', '');
   if (!apiKey) {
@@ -419,11 +427,12 @@ function saveSettings(convertedSettings, rawSettings) {
 function buildSystemPrompt() {
   var prompt = [
     'You are a practical assistant for a Pebble watch. Replies must be useful, compact, and readable on a tiny screen. Do not use markdown, write in plain text.',
-    'Return only valid JSON in this shape: {"reply":"watch answer","timeline":null,"search":null,"notes":null}.',
+    'Return only valid JSON in this shape: {"reply":"watch answer","timeline":null,"search":null,"notes":null,"calc":null}.',
     'Use 24-hour time. Use the provided current time, location context, search results, and notes/memory when relevant.',
     'Search tool: if current web info is needed and search is available, return {"reply":"Searching...","timeline":null,"search":"short query","notes":null}. Request search at most once; after results are provided, answer and set search null.',
     'Timeline tool: if the user asks to add/schedule/remind/put something on the timeline, set timeline to {"title":"short title","time":"ISO-8601 UTC date-time","body":"details","durationMinutes":30,"reminderMinutes":10}. If time is ambiguous, ask a short clarifying question and keep timeline null.',
-    'Notes tool: add notes only for durable user preferences/facts or explicit "remember" requests. Put short note strings in notes. Do not duplicate existing memory or store temporary facts. The notes are your database; add things you think are important.'
+    'Notes tool: add notes only for durable user preferences/facts or explicit "remember" requests. Put short note strings in notes. Do not duplicate existing memory or store temporary facts. The notes are your database; add things you think are important.',
+    'Calculator tool: if exact arithmetic or conversion is needed, return calc as either {"expression":"2+2*10"} or {"value":12,"from":"eur","to":"dkk"}. After the result is provided, answer and set calc null.'
   ].join(' ');
   var extra = getSetting('ExtraSystemPrompt', '');
   if (extra) {
@@ -432,7 +441,7 @@ function buildSystemPrompt() {
   return prompt;
 }
 
-function buildMessages(prompt, contextText, searchResultsText) {
+function buildMessages(prompt, contextText, searchResultsText, calculatorResultsText) {
   var messages = [
     { role: 'system', content: buildSystemPrompt() },
     { role: 'system', content: 'Current time is ' + new Date().toISOString() + '.' }
@@ -444,6 +453,9 @@ function buildMessages(prompt, contextText, searchResultsText) {
   messages.push({ role: 'system', content: buildNotesContext() });
   if (searchResultsText) {
     messages.push({ role: 'system', content: searchResultsText });
+  }
+  if (calculatorResultsText) {
+    messages.push({ role: 'system', content: calculatorResultsText });
   }
 
   var start = Math.max(0, history.length - 6);
@@ -468,16 +480,124 @@ function parseAssistantContent(content) {
       reply: String(parsed.reply || ''),
       timeline: parsed.timeline || null,
       search: parsed.search || null,
-      notes: parsed.notes || null
+      notes: parsed.notes || null,
+      calc: parsed.calc || null
     };
   } catch (err) {
     return {
       reply: String(content || ''),
       timeline: null,
       search: null,
-      notes: null
+      notes: null,
+      calc: null
     };
   }
+}
+
+function safeEvalExpression(expression) {
+  if (!/^[0-9+\-*/().,%\s]+$/.test(expression)) {
+    throw new Error('Unsupported characters in expression');
+  }
+  var normalized = expression.replace(/%/g, '/100');
+  /* eslint-disable no-new-func */
+  return Function('return (' + normalized + ');')();
+  /* eslint-enable no-new-func */
+}
+
+function unitFactor(unit) {
+  var factors = {
+    m: 1,
+    meter: 1,
+    meters: 1,
+    km: 1000,
+    kilometer: 1000,
+    kilometers: 1000,
+    cm: 0.01,
+    mm: 0.001,
+    ft: 0.3048,
+    feet: 0.3048,
+    foot: 0.3048,
+    inch: 0.0254,
+    inches: 0.0254,
+    in: 0.0254,
+    yd: 0.9144,
+    yard: 0.9144,
+    yards: 0.9144,
+    mi: 1609.344,
+    mile: 1609.344,
+    miles: 1609.344,
+    g: 1,
+    gram: 1,
+    grams: 1,
+    kg: 1000,
+    kilogram: 1000,
+    kilograms: 1000,
+    lb: 453.59237,
+    lbs: 453.59237,
+    pound: 453.59237,
+    pounds: 453.59237,
+    oz: 28.349523125,
+    l: 1,
+    liter: 1,
+    liters: 1,
+    ml: 0.001,
+    cl: 0.01,
+    dl: 0.1,
+    gal: 3.785411784,
+    gallon: 3.785411784,
+    gallons: 3.785411784
+  };
+  return factors[String(unit || '').toLowerCase()];
+}
+
+function currencyRate(unit) {
+  var rates = {
+    dkk: 1,
+    eur: 7.46,
+    usd: 6.85,
+    gbp: 8.75,
+    sek: 0.68,
+    nok: 0.64
+  };
+  return rates[String(unit || '').toLowerCase()];
+}
+
+function runCalculatorTool(calc) {
+  if (!calc) {
+    return null;
+  }
+
+  if (calc.expression) {
+    var expressionResult = safeEvalExpression(String(calc.expression));
+    return 'Calculator result: ' + calc.expression + ' = ' + expressionResult;
+  }
+
+  if (calc.value !== undefined && calc.from && calc.to) {
+    var value = Number(calc.value);
+    if (isNaN(value)) {
+      throw new Error('Invalid numeric value for conversion');
+    }
+
+    var fromCurrency = currencyRate(calc.from);
+    var toCurrency = currencyRate(calc.to);
+    if (fromCurrency && toCurrency) {
+      var dkkValue = value * fromCurrency;
+      var currencyResult = dkkValue / toCurrency;
+      return 'Calculator result: ' + value + ' ' + calc.from + ' = ' + currencyResult + ' ' + calc.to;
+    }
+
+    var fromFactor = unitFactor(calc.from);
+    var toFactor = unitFactor(calc.to);
+    if (!fromFactor || !toFactor) {
+      throw new Error('Unsupported conversion units');
+    }
+
+    var baseValue = value * fromFactor;
+    var converted = baseValue / toFactor;
+    return 'Calculator result: ' + value + ' ' + calc.from + ' = ' + converted + ' ' + calc.to;
+  }
+
+  throw new Error('Unsupported calculator request');
 }
 
 function extractReplyFromPartialJson(content) {
@@ -943,10 +1063,23 @@ function callOpenRouter(prompt) {
     var searchAvailable = getBoolSetting('EnableSearch', false) && !!getSetting('BraveSearchApiKey', '');
     debugLog('context ready searchAvailable=' + searchAvailable + ' locationContext=' + clip(locationContext, 120));
     var contextText = locationContext + '\nSearch available: ' + (searchAvailable ? 'yes, request search with the search field when needed.' : 'no.') ;
-    var firstMessages = buildMessages(prompt, contextText, null);
+    var firstMessages = buildMessages(prompt, contextText, null, null);
 
     if (!searchAvailable || !promptLooksLikeSearch(prompt)) {
       callModelStream(firstMessages, generation, function(parsed, alreadySent) {
+        if (parsed.calc) {
+          try {
+            var calculatorResultsText = runCalculatorTool(parsed.calc);
+            debugLog('calculator tool result=' + calculatorResultsText);
+            var calculatorMessages = buildMessages(prompt, contextText, null, calculatorResultsText);
+            callModel(calculatorMessages, generation, function(finalParsed) {
+              finishAssistantTurn(prompt, finalParsed, false);
+            });
+          } catch (err) {
+            showError('Calculator failed.', err.message);
+          }
+          return;
+        }
         finishAssistantTurn(prompt, parsed, alreadySent);
       });
       return;
@@ -960,11 +1093,22 @@ function callOpenRouter(prompt) {
             return;
           }
           sendToWatch({ Status: 'Thinking...' });
-          var secondMessages = buildMessages(prompt, contextText, searchResultsText);
+          var secondMessages = buildMessages(prompt, contextText, searchResultsText, null);
           callModelStream(secondMessages, generation, function(finalParsed, alreadySent) {
             finishAssistantTurn(prompt, finalParsed, alreadySent);
           });
         });
+      } else if (parsed.calc) {
+        try {
+          var calculatorResultsText = runCalculatorTool(parsed.calc);
+          debugLog('calculator tool result=' + calculatorResultsText);
+          var calculatorMessages = buildMessages(prompt, contextText, null, calculatorResultsText);
+          callModel(calculatorMessages, generation, function(finalParsed) {
+            finishAssistantTurn(prompt, finalParsed, false);
+          });
+        } catch (err) {
+          showError('Calculator failed.', err.message);
+        }
       } else {
         finishAssistantTurn(prompt, parsed, false);
       }
@@ -1069,6 +1213,7 @@ function addTimelinePin(timeline) {
 Pebble.addEventListener('ready', function() {
   console.log('PebbleKit JS ready');
   sendStatsToWatch();
+  sendToolStatesToWatch();
   refreshRemainingCredits();
 });
 
@@ -1082,6 +1227,7 @@ Pebble.addEventListener('appmessage', function(e) {
   if (e.payload && e.payload.ToggleLocation) {
     var locationEnabled = toggleBoolSetting('EnableLocation', false);
     sendToWatch({ Status: locationEnabled ? 'Location on' : 'Location off' });
+    sendToolStatesToWatch();
     sendStatsToWatch();
     return;
   }
@@ -1089,6 +1235,15 @@ Pebble.addEventListener('appmessage', function(e) {
   if (e.payload && e.payload.ToggleMemory) {
     var memoryEnabled = toggleBoolSetting('EnableMemory', true);
     sendToWatch({ Status: memoryEnabled ? 'Memory on' : 'Memory off' });
+    sendToolStatesToWatch();
+    sendStatsToWatch();
+    return;
+  }
+
+  if (e.payload && e.payload.ToggleSearch) {
+    var searchEnabled = toggleBoolSetting('EnableSearch', false);
+    sendToWatch({ Status: searchEnabled ? 'Search on' : 'Search off' });
+    sendToolStatesToWatch();
     sendStatsToWatch();
     return;
   }
@@ -1139,6 +1294,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
   var rawSettings = clay.getSettings(e.response, false);
   saveSettings(convertedSettings, rawSettings);
   sendToWatch({ Status: 'Settings saved' });
+  sendToolStatesToWatch();
   sendStatsToWatch();
   refreshRemainingCredits();
 });
