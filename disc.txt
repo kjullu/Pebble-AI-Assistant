@@ -1,0 +1,1 @@
+AI Chat brings a practical voice-first AI assistant to Pebble. Speak a prompt from your watch, get fast answers through OpenRouter, and use built-in tools like web search, calculator/conversions, memory notes, and timeline actions. Configure the model, tools, and memory from the phone app, then keep everything accessible right from your wrist.
