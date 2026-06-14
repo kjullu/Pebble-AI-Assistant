@@ -366,7 +366,7 @@ function saveSessionsFromText(text) {
 function saveCurrentSessionToHistory() {
   var sessions = getSessions();
   var summary = history.map(function(entry) {
-    return entry.role + ': ' + entry.content;
+    return entry.role + ':\n' + entry.content;
   }).join('\n');
   if (!summary) {
     return;

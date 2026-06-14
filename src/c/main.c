@@ -70,6 +70,16 @@ static bool is_session_label(const char *line) {
   return strncmp(line, "user:", 5) == 0 || strncmp(line, "assistant:", 10) == 0 || strncmp(line, "User:", 5) == 0 || strncmp(line, "Assistant:", 10) == 0;
 }
 
+static int session_label_prefix_length(const char *line) {
+  if (strncmp(line, "user:", 5) == 0 || strncmp(line, "User:", 5) == 0) {
+    return 5;
+  }
+  if (strncmp(line, "assistant:", 10) == 0 || strncmp(line, "Assistant:", 10) == 0) {
+    return 10;
+  }
+  return 0;
+}
+
 static int16_t layout_sessions_text(GContext *ctx, GRect bounds, bool draw) {
   GFont header_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   GFont label_font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
@@ -84,22 +94,59 @@ static int16_t layout_sessions_text(GContext *ctx, GRect bounds, bool draw) {
     }
 
     if (line[0] != '\0') {
-      GFont font = body_font;
       if (is_session_header(line)) {
-        font = header_font;
+        GRect measure_rect = GRect(0, 0, bounds.size.w, TEXT_MEASURE_HEIGHT);
+        GSize size = graphics_text_layout_get_content_size(line, header_font, measure_rect,
+                                                           GTextOverflowModeWordWrap, GTextAlignmentLeft);
+        GRect draw_rect = GRect(0, y, bounds.size.w, size.h + PADDING);
+        if (draw) {
+          graphics_context_set_text_color(ctx, GColorBlack);
+          graphics_draw_text(ctx, line, header_font, draw_rect, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+        }
+        y += size.h + PADDING;
       } else if (is_session_label(line)) {
-        font = label_font;
-      }
+        int prefix_len = session_label_prefix_length(line);
+        char prefix[16];
+        char remainder[512];
+        strncpy(prefix, line, prefix_len);
+        prefix[prefix_len] = '\0';
+        snprintf(remainder, sizeof(remainder), "%s", line + prefix_len);
+        while (remainder[0] == ' ') {
+          memmove(remainder, remainder + 1, strlen(remainder));
+        }
 
-      GRect measure_rect = GRect(0, 0, bounds.size.w, TEXT_MEASURE_HEIGHT);
-      GSize size = graphics_text_layout_get_content_size(line, font, measure_rect,
-                                                         GTextOverflowModeWordWrap, GTextAlignmentLeft);
-      GRect draw_rect = GRect(0, y, bounds.size.w, size.h + PADDING);
-      if (draw) {
-        graphics_context_set_text_color(ctx, GColorBlack);
-        graphics_draw_text(ctx, line, font, draw_rect, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+        GSize prefix_size = graphics_text_layout_get_content_size(prefix, label_font, GRect(0, 0, bounds.size.w, TEXT_MEASURE_HEIGHT),
+                                                                  GTextOverflowModeWordWrap, GTextAlignmentLeft);
+        GSize body_size = {0, 0};
+        if (remainder[0] != '\0') {
+          body_size = graphics_text_layout_get_content_size(remainder, body_font, GRect(0, 0, bounds.size.w, TEXT_MEASURE_HEIGHT),
+                                                            GTextOverflowModeWordWrap, GTextAlignmentLeft);
+        }
+        if (draw) {
+          graphics_context_set_text_color(ctx, GColorBlack);
+          graphics_draw_text(ctx, prefix, label_font, GRect(0, y, bounds.size.w, prefix_size.h + PADDING),
+                             GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+          if (remainder[0] != '\0') {
+            graphics_draw_text(ctx, remainder, body_font, GRect(0, y + prefix_size.h, bounds.size.w, body_size.h + PADDING),
+                               GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+          }
+        }
+        y += prefix_size.h;
+        if (remainder[0] != '\0') {
+          y += body_size.h;
+        }
+        y += PADDING;
+      } else {
+        GRect measure_rect = GRect(0, 0, bounds.size.w, TEXT_MEASURE_HEIGHT);
+        GSize size = graphics_text_layout_get_content_size(line, body_font, measure_rect,
+                                                           GTextOverflowModeWordWrap, GTextAlignmentLeft);
+        GRect draw_rect = GRect(0, y, bounds.size.w, size.h + PADDING);
+        if (draw) {
+          graphics_context_set_text_color(ctx, GColorBlack);
+          graphics_draw_text(ctx, line, body_font, draw_rect, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+        }
+        y += size.h + PADDING;
       }
-      y += size.h + PADDING;
     } else {
       y += PADDING;
     }
