@@ -45,6 +45,8 @@ static bool s_show_sessions;
 static bool s_settings_return_home;
 static int s_settings_selection;
 static bool s_location_enabled;
+static bool s_memory_enabled = true;
+static bool s_calculator_enabled = true;
 static bool s_search_enabled;
 #ifdef _PBL_API_EXISTS_touch_service_subscribe
 static AppTimer *s_touch_long_timer;
@@ -63,9 +65,11 @@ static void open_sessions_screen(void);
 static void update_settings_text(void) {
   static char settings_text[160];
   snprintf(settings_text, sizeof(settings_text),
-           "%c Location: %s\n%c Search: %s",
+           "%c Location: %s\n%c Memory: %s\n%c Calculator: %s\n%c Search: %s",
            s_settings_selection == 0 ? '>' : ' ', s_location_enabled ? "on" : "off",
-           s_settings_selection == 1 ? '>' : ' ', s_search_enabled ? "on" : "off");
+           s_settings_selection == 1 ? '>' : ' ', s_memory_enabled ? "on" : "off",
+           s_settings_selection == 2 ? '>' : ' ', s_calculator_enabled ? "on" : "off",
+           s_settings_selection == 3 ? '>' : ' ', s_search_enabled ? "on" : "off");
   text_layer_set_text(s_settings_layer, settings_text);
 }
 
@@ -415,6 +419,8 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   if (status_tuple && strcmp(status, "Cancelled") == 0) {
     s_request_active = false;
   } else if (status_tuple && (strcmp(status, "Location on") == 0 || strcmp(status, "Location off") == 0 ||
+                              strcmp(status, "Memory on") == 0 || strcmp(status, "Memory off") == 0 ||
+                              strcmp(status, "Calculator on") == 0 || strcmp(status, "Calculator off") == 0 ||
                               strcmp(status, "Search on") == 0 || strcmp(status, "Search off") == 0)) {
     vibes_short_pulse();
     status = "Ready";
@@ -428,6 +434,8 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
   if (tool_states_tuple) {
     const char *states = tool_states_tuple->value->cstring;
     s_location_enabled = strstr(states, "location=1") != NULL;
+    s_memory_enabled = strstr(states, "memory=1") != NULL;
+    s_calculator_enabled = strstr(states, "calculator=1") != NULL;
     s_search_enabled = strstr(states, "search=1") != NULL;
     if (s_show_settings) {
       update_settings_text();
@@ -521,7 +529,7 @@ static void down_long_click_handler(ClickRecognizerRef recognizer, void *context
 
 static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
   if (s_show_settings) {
-    s_settings_selection = (s_settings_selection + 1) % 2;
+    s_settings_selection = (s_settings_selection + 3) % 4;
     update_display("Ready");
   } else if (s_show_home) {
     open_settings_screen();
@@ -533,7 +541,7 @@ static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
 
 static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
   if (s_show_settings) {
-    s_settings_selection = (s_settings_selection + 1) % 2;
+    s_settings_selection = (s_settings_selection + 1) % 4;
     update_display("Ready");
   } else if (s_show_home) {
     open_sessions_screen();
@@ -549,6 +557,12 @@ static void toggle_selected_setting(void) {
       send_simple_command(MESSAGE_KEY_ToggleLocation, "Toggle failed");
       break;
     case 1:
+      send_simple_command(MESSAGE_KEY_ToggleMemory, "Toggle failed");
+      break;
+    case 2:
+      send_simple_command(MESSAGE_KEY_ToggleCalculator, "Toggle failed");
+      break;
+    case 3:
       send_simple_command(MESSAGE_KEY_ToggleSearch, "Toggle failed");
       break;
   }

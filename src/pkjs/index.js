@@ -226,10 +226,6 @@ function buildStatsText() {
     'Remaining: ' + remaining,
     'Messages: ' + Number(stats.messages || 0),
     'Searches: ' + Number(stats.searches || 0),
-    'Location: ' + (getBoolSetting('EnableLocation', false) ? 'on' : 'off'),
-    'Memory: ' + (getBoolSetting('EnableMemory', true) ? 'on' : 'off'),
-    'Calculator: ' + (getBoolSetting('EnableCalculator', true) ? 'on' : 'off'),
-    'Search: ' + (getBoolSetting('EnableSearch', false) ? 'on' : 'off'),
     model
   ].join('\n');
 }
@@ -1319,6 +1315,14 @@ Pebble.addEventListener('appmessage', function(e) {
   if (e.payload && e.payload.ToggleMemory) {
     var memoryEnabled = toggleBoolSetting('EnableMemory', true);
     sendToWatch({ Status: memoryEnabled ? 'Memory on' : 'Memory off' });
+    sendToolStatesToWatch();
+    sendStatsToWatch();
+    return;
+  }
+
+  if (e.payload && e.payload.ToggleCalculator) {
+    var calculatorEnabled = toggleBoolSetting('EnableCalculator', true);
+    sendToWatch({ Status: calculatorEnabled ? 'Calculator on' : 'Calculator off' });
     sendToolStatesToWatch();
     sendStatsToWatch();
     return;
